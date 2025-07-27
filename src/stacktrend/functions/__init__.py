@@ -1,0 +1,1 @@
+"""Azure Functions for data collection and processing.""" 

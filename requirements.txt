@@ -1,0 +1,12 @@
+# Azure Functions dependencies
+azure-functions
+azure-storage-blob
+azure-identity
+
+# GitHub API
+requests
+PyGithub
+
+# Data processing
+pandas
+python-dotenv
