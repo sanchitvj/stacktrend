@@ -1,0 +1,123 @@
+name: Deploy GitHub Collector to Azure Container Apps
+
+on:
+  push:
+    branches: [ dev ]
+    paths:
+      - 'src/stacktrend/functions/github_collector/**'
+      - 'src/stacktrend/functions/host.json'
+      - 'src/stacktrend/functions/local.settings.json'
+      - 'src/stacktrend/utils/**'
+      - 'src/stacktrend/config/**'
+      - 'requirements.txt'
+      - 'docker_images/github-collector.Dockerfile'
+      - '.github/workflows/deploy-azure-function.yml'
+
+env:
+  AZURE_CONTAINER_REGISTRY: gitcollector.azurecr.io
+  AZURE_CONTAINER_APP: gitcollector-cont-app
+  CONTAINER_ENVIRONMENT: gitcollector-cont-app-env
+  IMAGE_NAME: gitcollector
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 'Checkout GitHub Action'
+      uses: actions/checkout@v4
+
+    - name: 'Login to Azure'
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: 'Login to Azure Container Registry'
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.AZURE_CONTAINER_REGISTRY }}
+        username: ${{ secrets.ACR_USERNAME }}
+        password: ${{ secrets.ACR_PASSWORD }}
+
+    - name: 'Build and push Docker image'
+      run: |
+        docker build -f docker_images/github-collector.Dockerfile -t ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+        docker build -f docker_images/github-collector.Dockerfile -t ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
+        docker push ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        docker push ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+    # Deploy to Azure Container Apps  
+    - name: 'Deploy to Azure Container Apps'
+      run: |
+        # Check if container app exists and its state
+        if az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend &> /dev/null; then
+          # Check provisioning state
+          PROVISIONING_STATE=$(az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --query "properties.provisioningState" -o tsv)
+          echo "Container app exists with provisioning state: $PROVISIONING_STATE"
+          
+          if [ "$PROVISIONING_STATE" == "Failed" ]; then
+            echo "Container app is in failed state. Deleting and recreating..."
+            az containerapp delete --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --yes
+            # Set flag to create new app
+            CREATE_NEW_APP=true
+          else
+            echo "Container app is healthy. Configuring registry and updating image..."
+            
+            # First, configure registry authentication
+            az containerapp registry set \
+              --name ${{ env.AZURE_CONTAINER_APP }} \
+              --resource-group stacktrend \
+              --server ${{ env.AZURE_CONTAINER_REGISTRY }} \
+              --username ${{ secrets.ACR_USERNAME }} \
+              --password ${{ secrets.ACR_PASSWORD }}
+            
+            # Then update the container app with new image
+            az containerapp update \
+              --name ${{ env.AZURE_CONTAINER_APP }} \
+              --resource-group stacktrend \
+              --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            
+            CREATE_NEW_APP=false
+          fi
+        else
+          echo "Container app does not exist."
+          CREATE_NEW_APP=true
+        fi
+        
+        # Create new container app if needed
+        if [ "$CREATE_NEW_APP" == "true" ]; then
+            
+          echo "Creating new container app..."
+          
+          # First, ensure the environment exists
+          if ! az containerapp env show --name ${{ env.CONTAINER_ENVIRONMENT }} --resource-group stacktrend &> /dev/null; then
+            echo "Creating Container Apps environment..."
+            az containerapp env create \
+              --name ${{ env.CONTAINER_ENVIRONMENT }} \
+              --resource-group stacktrend \
+              --location eastus
+          fi
+          
+          # Create the container app
+          az containerapp create \
+            --name ${{ env.AZURE_CONTAINER_APP }} \
+            --resource-group stacktrend \
+            --environment ${{ env.CONTAINER_ENVIRONMENT }} \
+            --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            --registry-server ${{ env.AZURE_CONTAINER_REGISTRY }} \
+            --registry-username ${{ secrets.ACR_USERNAME }} \
+            --registry-password ${{ secrets.ACR_PASSWORD }} \
+            --target-port 80 \
+            --ingress external \
+            --min-replicas 0 \
+            --max-replicas 10 \
+            --cpu 0.5 \
+            --memory 1Gi \
+            --env-vars AZURE_STORAGE_ACCOUNT_NAME="${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}" \
+                       AZURE_STORAGE_ACCOUNT_KEY="${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}" \
+                       GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+        fi
+        
+        # Show final status
+        echo "Checking final container app status..."
+        az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --query "{name:name, provisioningState:properties.provisioningState, fqdn:properties.configuration.ingress.fqdn}" -o table

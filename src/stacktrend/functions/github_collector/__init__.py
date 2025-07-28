@@ -1,6 +1,7 @@
 """
 GitHub Data Collector Azure Function
 Runs every 6 hours to collect trending repository data and store in Azure Storage bronze layer.
+Updated: 2025-01-28 - Force redeployment to fix blob naming
 """
 
 import datetime
@@ -9,12 +10,17 @@ import azure.functions as func
 import sys
 import os
 
-# Add the project root to Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
+sys.path.insert(0, '/home/site/wwwroot/src')
 
-from stacktrend.utils.github_client import GitHubClient
-from stacktrend.utils.azure_client import AzureStorageClient
-from stacktrend.config.settings import settings
+try:
+    from stacktrend.utils.github_client import GitHubClient
+    from stacktrend.utils.azure_client import AzureStorageClient
+    from stacktrend.config.settings import settings
+except ImportError:
+    sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
+    from stacktrend.utils.github_client import GitHubClient
+    from stacktrend.utils.azure_client import AzureStorageClient
+    from stacktrend.config.settings import settings
 
 
 def main(mytimer: func.TimerRequest) -> None:
@@ -25,12 +31,12 @@ def main(mytimer: func.TimerRequest) -> None:
     if mytimer.past_due:
         logging.info('The timer is past due!')
 
-    logging.info('GitHub collector function triggered at %s', utc_timestamp)
+    logging.info(f'Timer trigger: GitHub collector function started at {utc_timestamp}')
     
     try:
         # Validate configuration
         settings.validate()
-        logging.info('✅ Configuration validated successfully')
+        logging.info('Configuration validated successfully')
         
         # Initialize clients
         github_client = GitHubClient()
@@ -41,7 +47,7 @@ def main(mytimer: func.TimerRequest) -> None:
         logging.info(f'GitHub rate limit: {rate_limit_info.get("core", {}).get("remaining", "unknown")} remaining')
         
         # Collect trending repositories
-        logging.info('🔄 Starting GitHub data collection...')
+        logging.info('Starting GitHub data collection...')
         
         # Collect repositories for different languages
         languages = ['python', 'javascript', 'typescript', 'java', 'go', 'rust', 'cpp']
@@ -57,7 +63,7 @@ def main(mytimer: func.TimerRequest) -> None:
                 repo['collection_timestamp'] = utc_timestamp
             
             all_repos.extend(repos)
-            logging.info(f'✅ Collected {len(repos)} {language} repositories')
+            logging.info(f'Collected {len(repos)} {language} repositories')
         
         # Also collect general trending (no language filter)
         logging.info('Collecting general trending repositories...')
@@ -67,7 +73,7 @@ def main(mytimer: func.TimerRequest) -> None:
             repo['collection_timestamp'] = utc_timestamp
         all_repos.extend(general_repos)
         
-        logging.info(f'✅ Total repositories collected: {len(all_repos)}')
+        logging.info(f'Total repositories collected: {len(all_repos)}')
         
         # Store data in Azure Storage bronze layer
         if all_repos:
@@ -90,9 +96,9 @@ def main(mytimer: func.TimerRequest) -> None:
             )
             
             if success:
-                logging.info(f'✅ Successfully stored data in bronze layer: {blob_name}')
+                logging.info(f'Successfully stored data in bronze layer: {blob_name}')
             else:
-                logging.error('❌ Failed to store data in Azure Storage')
+                logging.error('Failed to store data in Azure Storage')
         
         # Final rate limit check
         final_rate_limit = github_client.get_rate_limit_info()
