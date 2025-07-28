@@ -66,10 +66,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             if not bronze_data:
                 logging.error(f'Failed to download bronze file: {bronze_file}')
                 continue
+            
+            # Debug: Log bronze data structure
+            repositories = bronze_data.get('repositories', [])
+            logging.info(f'Bronze file {bronze_file} contains {len(repositories)} repositories')
+            if repositories:
+                first_repo = repositories[0]
+                logging.info(f'First repository type: {type(first_repo)}, sample: {str(first_repo)[:200]}...')
                 
             # Transform the data
             transformed_repos = transformer.transform_repositories(
-                bronze_data.get('repositories', []),
+                repositories,
                 bronze_data.get('metadata', {})
             )
             

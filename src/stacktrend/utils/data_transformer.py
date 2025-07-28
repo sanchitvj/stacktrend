@@ -44,10 +44,26 @@ class SilverTransformer:
         Returns:
             List of transformed repository data
         """
+        if not repositories:
+            logging.info("No repositories provided for transformation")
+            return []
+            
+        logging.info(f"Starting transformation of {len(repositories)} repositories")
+        
+        # Log data structure for debugging
+        if repositories:
+            first_item = repositories[0]
+            logging.info(f"First repository type: {type(first_item)}")
+            if isinstance(first_item, dict):
+                logging.info(f"First repository keys: {list(first_item.keys())[:10]}")
+            elif isinstance(first_item, str):
+                logging.info(f"First repository string: {first_item[:100]}")
+        
         transformed_repos = []
         seen_repos = set()  # For deduplication
+        successful_transforms = 0
         
-        for repo in repositories:
+        for i, repo in enumerate(repositories):
             try:
                 transformed_repo = self._transform_single_repository(repo, metadata)
                 
@@ -57,17 +73,28 @@ class SilverTransformer:
                     if repo_id and repo_id not in seen_repos:
                         transformed_repos.append(transformed_repo)
                         seen_repos.add(repo_id)
+                        successful_transforms += 1
                         
             except Exception as e:
-                logging.warning(f"Failed to transform repository {repo.get('name', 'unknown')}: {str(e)}")
+                repo_name = repo.get('name', 'unknown') if isinstance(repo, dict) else str(repo)[:50]
+                logging.warning(f"Failed to transform repository {repo_name}: {str(e)}")
                 continue
                 
-        logging.info(f"Transformed {len(transformed_repos)} repositories (deduplicated from {len(repositories)})")
+        logging.info(f"Successfully transformed {successful_transforms} repositories out of {len(repositories)} (deduplicated to {len(transformed_repos)})")
         return transformed_repos
     
     def _transform_single_repository(self, repo: Dict[Any, Any], metadata: Dict[Any, Any]) -> Optional[Dict[Any, Any]]:
         """Transform a single repository to silver format."""
-        if not repo or not isinstance(repo, dict):
+        if not repo:
+            return None
+        
+        # Handle case where repo is a string instead of dict
+        if isinstance(repo, str):
+            logging.warning(f"Repository data is string instead of dict: {repo[:100]}...")
+            return None
+            
+        if not isinstance(repo, dict):
+            logging.warning(f"Repository data is not a dict: {type(repo)}")
             return None
             
         # Extract and clean basic fields
@@ -86,9 +113,9 @@ class SilverTransformer:
         collection_language = self._normalize_language(repo.get('collection_language', ''))
         
         # Calculate metrics
-        stars = int(repo.get('stargazers_count', 0))
-        forks = int(repo.get('forks_count', 0))
-        watchers = int(repo.get('watchers_count', 0))
+        stars = int(repo.get('stars', 0))  # Bronze data uses 'stars' not 'stargazers_count'
+        forks = int(repo.get('forks', 0))  # Bronze data uses 'forks' not 'forks_count'
+        watchers = int(repo.get('watchers', 0))  # Bronze data uses 'watchers' not 'watchers_count'
         size = int(repo.get('size', 0))
         
         # Calculate derived metrics
@@ -101,9 +128,9 @@ class SilverTransformer:
             # Basic Information
             'full_name': full_name,
             'name': repo.get('name', '').strip(),
-            'owner': repo.get('owner', {}).get('login', '').strip(),
+            'owner': repo.get('owner', '').strip(),  # Bronze data has 'owner' as string
             'description': self._clean_description(repo.get('description', '')),
-            'url': repo.get('html_url', ''),
+            'url': repo.get('url', ''),
             'clone_url': repo.get('clone_url', ''),
             
             # Language Information
@@ -116,7 +143,7 @@ class SilverTransformer:
             'forks': forks,
             'watchers': watchers,
             'size_kb': size,
-            'open_issues': int(repo.get('open_issues_count', 0)),
+            'open_issues': int(repo.get('open_issues', 0)),  # Bronze data uses 'open_issues' not 'open_issues_count'
             
             # Derived Metrics
             'momentum_score': momentum_score,
@@ -130,9 +157,9 @@ class SilverTransformer:
             'pushed_at': pushed_at.isoformat() if pushed_at else None,
             
             # Repository Properties
-            'is_fork': bool(repo.get('fork', False)),
+            'is_fork': bool(repo.get('fork', False)),  # May not exist in bronze data
             'is_archived': bool(repo.get('archived', False)),
-            'is_private': bool(repo.get('private', False)),
+            'is_private': repo.get('visibility', 'public') != 'public',  # Bronze data uses 'visibility'  
             'default_branch': repo.get('default_branch', 'main'),
             'has_wiki': bool(repo.get('has_wiki', False)),
             'has_issues': bool(repo.get('has_issues', False)),
@@ -177,7 +204,7 @@ class SilverTransformer:
         if not created_at:
             return 0.0
             
-        stars = int(repo.get('stargazers_count', 0))
+        stars = int(repo.get('stars', 0))  # Use 'stars' from bronze data
         days_old = (datetime.now(timezone.utc) - created_at).days
         
         if days_old <= 0:
@@ -212,8 +239,8 @@ class SilverTransformer:
                 score += 5
         
         # Open issues ratio (20% weight)
-        stars = max(int(repo.get('stargazers_count', 0)), 1)
-        issues = int(repo.get('open_issues_count', 0))
+        stars = max(int(repo.get('stars', 0)), 1)  # Use 'stars' from bronze data
+        issues = int(repo.get('open_issues', 0))   # Use 'open_issues' from bronze data
         issue_ratio = issues / stars
         
         if issue_ratio < 0.1:
