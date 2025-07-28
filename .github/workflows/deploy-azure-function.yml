@@ -44,21 +44,32 @@ jobs:
         docker push ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         docker push ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-    # Create or update Container App with managed identity for ACR access
+    # Deploy to Azure Container Apps  
     - name: 'Deploy to Azure Container Apps'
       run: |
         # Check if container app exists
         if az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend &> /dev/null; then
-          echo "Updating existing container app..."
+          echo "Container app exists. Updating image..."
+          
+          # Update the container app with new image
           az containerapp update \
             --name ${{ env.AZURE_CONTAINER_APP }} \
             --resource-group stacktrend \
-            --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-            --registry-server ${{ env.AZURE_CONTAINER_REGISTRY }} \
-            --registry-username ${{ secrets.ACR_USERNAME }} \
-            --registry-password ${{ secrets.ACR_PASSWORD }}
+            --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            
         else
           echo "Creating new container app..."
+          
+          # First, ensure the environment exists
+          if ! az containerapp env show --name ${{ env.CONTAINER_ENVIRONMENT }} --resource-group stacktrend &> /dev/null; then
+            echo "Creating Container Apps environment..."
+            az containerapp env create \
+              --name ${{ env.CONTAINER_ENVIRONMENT }} \
+              --resource-group stacktrend \
+              --location eastus
+          fi
+          
+          # Create the container app
           az containerapp create \
             --name ${{ env.AZURE_CONTAINER_APP }} \
             --resource-group stacktrend \
@@ -72,5 +83,8 @@ jobs:
             --min-replicas 0 \
             --max-replicas 10 \
             --cpu 0.5 \
-            --memory 1Gi
+            --memory 1Gi \
+            --env-vars AZURE_STORAGE_ACCOUNT_NAME="${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}" \
+                       AZURE_STORAGE_ACCOUNT_KEY="${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}" \
+                       GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
         fi
