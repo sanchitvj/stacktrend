@@ -49,9 +49,17 @@ jobs:
       run: |
         # Check if container app exists
         if az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend &> /dev/null; then
-          echo "Container app exists. Updating image..."
+          echo "Container app exists. Configuring registry and updating image..."
           
-          # Update the container app with new image
+          # First, configure registry authentication
+          az containerapp registry set \
+            --name ${{ env.AZURE_CONTAINER_APP }} \
+            --resource-group stacktrend \
+            --server ${{ env.AZURE_CONTAINER_REGISTRY }} \
+            --username ${{ secrets.ACR_USERNAME }} \
+            --password ${{ secrets.ACR_PASSWORD }}
+          
+          # Then update the container app with new image
           az containerapp update \
             --name ${{ env.AZURE_CONTAINER_APP }} \
             --resource-group stacktrend \
