@@ -4,7 +4,9 @@ on:
   push:
     branches: [ dev ]
     paths:
-      - 'github_collector/**'
+      - 'src/stacktrend/functions/github_collector/**'
+      - 'src/stacktrend/functions/host.json'
+      - 'src/stacktrend/functions/local.settings.json'
       - 'src/stacktrend/utils/**'
       - 'src/stacktrend/config/**'
       - 'requirements.txt'
@@ -47,25 +49,44 @@ jobs:
     # Deploy to Azure Container Apps  
     - name: 'Deploy to Azure Container Apps'
       run: |
-        # Check if container app exists
+        # Check if container app exists and its state
         if az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend &> /dev/null; then
-          echo "Container app exists. Configuring registry and updating image..."
+          # Check provisioning state
+          PROVISIONING_STATE=$(az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --query "properties.provisioningState" -o tsv)
+          echo "Container app exists with provisioning state: $PROVISIONING_STATE"
           
-          # First, configure registry authentication
-          az containerapp registry set \
-            --name ${{ env.AZURE_CONTAINER_APP }} \
-            --resource-group stacktrend \
-            --server ${{ env.AZURE_CONTAINER_REGISTRY }} \
-            --username ${{ secrets.ACR_USERNAME }} \
-            --password ${{ secrets.ACR_PASSWORD }}
-          
-          # Then update the container app with new image
-          az containerapp update \
-            --name ${{ env.AZURE_CONTAINER_APP }} \
-            --resource-group stacktrend \
-            --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          if [ "$PROVISIONING_STATE" == "Failed" ]; then
+            echo "Container app is in failed state. Deleting and recreating..."
+            az containerapp delete --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --yes
+            # Set flag to create new app
+            CREATE_NEW_APP=true
+          else
+            echo "Container app is healthy. Configuring registry and updating image..."
             
+            # First, configure registry authentication
+            az containerapp registry set \
+              --name ${{ env.AZURE_CONTAINER_APP }} \
+              --resource-group stacktrend \
+              --server ${{ env.AZURE_CONTAINER_REGISTRY }} \
+              --username ${{ secrets.ACR_USERNAME }} \
+              --password ${{ secrets.ACR_PASSWORD }}
+            
+            # Then update the container app with new image
+            az containerapp update \
+              --name ${{ env.AZURE_CONTAINER_APP }} \
+              --resource-group stacktrend \
+              --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            
+            CREATE_NEW_APP=false
+          fi
         else
+          echo "Container app does not exist."
+          CREATE_NEW_APP=true
+        fi
+        
+        # Create new container app if needed
+        if [ "$CREATE_NEW_APP" == "true" ]; then
+            
           echo "Creating new container app..."
           
           # First, ensure the environment exists
@@ -96,3 +117,7 @@ jobs:
                        AZURE_STORAGE_ACCOUNT_KEY="${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}" \
                        GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
         fi
+        
+        # Show final status
+        echo "Checking final container app status..."
+        az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --query "{name:name, provisioningState:properties.provisioningState, fqdn:properties.configuration.ingress.fqdn}" -o table
