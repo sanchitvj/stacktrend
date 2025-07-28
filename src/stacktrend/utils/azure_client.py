@@ -123,13 +123,16 @@ class AzureStorageClient:
             blobs = container_client.list_blobs(name_starts_with="github_repositories/")
             
             for blob in blobs:
-                # Check if blob was created recently
-                if blob.last_modified and blob.last_modified.replace(tzinfo=None) > cutoff_time:
-                    recent_files.append(blob.name)
+                # Only include actual JSON files (not directories)
+                if blob.name.endswith('.json') and blob.last_modified:
+                    # Check if blob was created recently
+                    if blob.last_modified.replace(tzinfo=None) > cutoff_time:
+                        recent_files.append(blob.name)
             
             # Sort by creation time (newest first)
             recent_files.sort(reverse=True)
             
+            print(f"Found {len(recent_files)} recent bronze files: {recent_files[:3]}...")
             return recent_files
             
         except AzureError as e:
