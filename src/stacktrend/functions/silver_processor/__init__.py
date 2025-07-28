@@ -5,8 +5,6 @@ Transforms raw GitHub data from bronze layer into clean, normalized silver layer
 
 import datetime
 import logging
-import json
-from typing import Dict, List, Any, Optional
 import azure.functions as func
 import sys
 import os
@@ -24,15 +22,21 @@ except ImportError:
     from stacktrend.utils.data_transformer import SilverTransformer
 
 
-def main(mytimer: func.TimerRequest) -> None:
+def main(mytimer: func.TimerRequest = None, req: func.HttpRequest = None):
     """Main function for silver data processing."""
     utc_timestamp = datetime.datetime.utcnow().replace(
         tzinfo=datetime.timezone.utc).isoformat()
 
-    if mytimer.past_due:
-        logging.info('The timer is past due!')
+    # Handle HTTP trigger for testing
+    if req is not None:
+        logging.info('🧪 HTTP trigger received for silver processing')
+        trigger_type = "HTTP"
+    else:
+        if mytimer and mytimer.past_due:
+            logging.info('The timer is past due!')
+        trigger_type = "Timer"
 
-    logging.info(f'Silver processor function started at {utc_timestamp}')
+    logging.info(f'Silver processor function started via {trigger_type} at {utc_timestamp}')
     
     try:
         # Validate configuration
@@ -44,7 +48,7 @@ def main(mytimer: func.TimerRequest) -> None:
         transformer = SilverTransformer()
         
         # Get recent bronze files to process
-        logging.info('🔍 Finding bronze files to process...')
+        logging.info('Finding bronze files to process...')
         bronze_files = azure_client.list_recent_bronze_files(hours_back=24)
         
         if not bronze_files:
@@ -108,6 +112,23 @@ def main(mytimer: func.TimerRequest) -> None:
         
         logging.info('Silver processing completed successfully')
         
+        # Return success response for HTTP trigger
+        if req is not None:
+            return func.HttpResponse(
+                f"✅ Silver processing completed successfully at {utc_timestamp}",
+                status_code=200
+            )
+        
+        # For timer triggers, just return None
+        return None
+        
     except Exception as e:
         logging.error(f'Error in silver processor: {str(e)}', exc_info=True)
+        
+        # Return error response for HTTP trigger
+        if req is not None:
+            return func.HttpResponse(
+                f"❌ Error in silver processor: {str(e)}",
+                status_code=500
+            )
         raise 
