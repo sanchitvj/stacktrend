@@ -16,7 +16,7 @@ on:
 env:
   AZURE_CONTAINER_REGISTRY: silverprocessor.azurecr.io
   AZURE_CONTAINER_APP: silverprocessor-cont-app
-  CONTAINER_ENVIRONMENT: silverprocessor-cont-app-env
+  CONTAINER_ENVIRONMENT: silverprocessor-cont-app-env1
   IMAGE_NAME: silverprocessor
 
 jobs:
