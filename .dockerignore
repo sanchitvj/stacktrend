@@ -1,0 +1,29 @@
+# Docker ignore file (optimized for multi-function structure)
+.git
+.github
+.gitignore
+README.md
+.env
+.vscode
+.cursor
+.DS_Store
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.coverage
+.nyc_output
+node_modules
+.python-version
+
+# Development artifacts
+stacktrend-function-app.zip
+test_*.py
+**/tests/
+
+# Docker images directory (only needed during build)
+docker_images/README.md
+
+# Other functions (exclude when building specific function)
+# This will be function-specific in each Dockerfile if needed 

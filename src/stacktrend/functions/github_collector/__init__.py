@@ -9,12 +9,17 @@ import azure.functions as func
 import sys
 import os
 
-# Add the project root to Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
+sys.path.insert(0, '/home/site/wwwroot/src')
 
-from stacktrend.utils.github_client import GitHubClient
-from stacktrend.utils.azure_client import AzureStorageClient
-from stacktrend.config.settings import settings
+try:
+    from stacktrend.utils.github_client import GitHubClient
+    from stacktrend.utils.azure_client import AzureStorageClient
+    from stacktrend.config.settings import settings
+except ImportError:
+    sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
+    from stacktrend.utils.github_client import GitHubClient
+    from stacktrend.utils.azure_client import AzureStorageClient
+    from stacktrend.config.settings import settings
 
 
 def main(mytimer: func.TimerRequest) -> None:
