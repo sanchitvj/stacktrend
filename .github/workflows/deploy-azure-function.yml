@@ -14,7 +14,7 @@ on:
 env:
   AZURE_CONTAINER_REGISTRY: gitcollector.azurecr.io
   AZURE_CONTAINER_APP: gitcollector-cont-app
-  CONTAINER_ENVIRONMENT: stacktrend-container-env
+  CONTAINER_ENVIRONMENT: gitcollector-cont-app-env
   IMAGE_NAME: gitcollector
 
 jobs:
@@ -44,10 +44,33 @@ jobs:
         docker push ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         docker push ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
+    # Create or update Container App with managed identity for ACR access
     - name: 'Deploy to Azure Container Apps'
-      uses: azure/container-apps-deploy-action@v1
-      with:
-        containerAppName: ${{ env.AZURE_CONTAINER_APP }}
-        resourceGroup: stacktrend
-        imageToDeploy: ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-        environmentName: ${{ env.CONTAINER_ENVIRONMENT }}
+      run: |
+        # Check if container app exists
+        if az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend &> /dev/null; then
+          echo "Updating existing container app..."
+          az containerapp update \
+            --name ${{ env.AZURE_CONTAINER_APP }} \
+            --resource-group stacktrend \
+            --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            --registry-server ${{ env.AZURE_CONTAINER_REGISTRY }} \
+            --registry-username ${{ secrets.ACR_USERNAME }} \
+            --registry-password ${{ secrets.ACR_PASSWORD }}
+        else
+          echo "Creating new container app..."
+          az containerapp create \
+            --name ${{ env.AZURE_CONTAINER_APP }} \
+            --resource-group stacktrend \
+            --environment ${{ env.CONTAINER_ENVIRONMENT }} \
+            --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            --registry-server ${{ env.AZURE_CONTAINER_REGISTRY }} \
+            --registry-username ${{ secrets.ACR_USERNAME }} \
+            --registry-password ${{ secrets.ACR_PASSWORD }} \
+            --target-port 80 \
+            --ingress external \
+            --min-replicas 0 \
+            --max-replicas 10 \
+            --cpu 0.5 \
+            --memory 1Gi
+        fi
