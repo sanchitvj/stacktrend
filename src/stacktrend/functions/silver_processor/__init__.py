@@ -1,6 +1,7 @@
 """
 Silver Data Processor Azure Function
 Transforms raw GitHub data from bronze layer into clean, normalized silver layer data.
+Updated: 2025-01-28 - Fix ingress to external
 """
 
 import datetime
@@ -117,4 +118,4 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             f"Error in silver processor: {str(e)}",
             status_code=500
-        ) 
+        )

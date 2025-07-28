@@ -45,38 +45,15 @@ jobs:
 
     - name: 'Deploy to Azure Container Apps'
       run: |
-        # Check if container app exists
+        # Force recreation to fix ingress settings
+        echo "Checking if container app exists..."
         if az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend &> /dev/null; then
-          PROVISIONING_STATE=$(az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --query "properties.provisioningState" -o tsv)
-          echo "Container app exists with provisioning state: $PROVISIONING_STATE"
-          
-          if [ "$PROVISIONING_STATE" == "Failed" ]; then
-            echo "Container app is in failed state. Deleting and recreating..."
-            az containerapp delete --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --yes
-            CREATE_NEW_APP=true
-          else
-            echo "Container app is healthy. Configuring registry and updating image..."
-            
-            # Configure registry authentication
-            az containerapp registry set \
-              --name ${{ env.AZURE_CONTAINER_APP }} \
-              --resource-group stacktrend \
-              --server ${{ env.AZURE_CONTAINER_REGISTRY }} \
-              --username ${{ secrets.SILVER_ACR_USERNAME }} \
-              --password ${{ secrets.SILVER_ACR_PASSWORD }}
-            
-            # Update the container app with new image
-            az containerapp update \
-              --name ${{ env.AZURE_CONTAINER_APP }} \
-              --resource-group stacktrend \
-              --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            
-            CREATE_NEW_APP=false
-          fi
-        else
-          echo "Container app does not exist."
-          CREATE_NEW_APP=true
+          echo "Container app exists. Deleting to ensure correct ingress settings..."
+          az containerapp delete --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --yes
         fi
+        
+        echo "Container app will be recreated with external ingress."
+        CREATE_NEW_APP=true
 
         # Create new container app if needed
         if [ "$CREATE_NEW_APP" == "true" ]; then
