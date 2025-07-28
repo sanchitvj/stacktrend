@@ -11,7 +11,7 @@ on:
       - 'src/stacktrend/config/**'
       - 'requirements.txt'
       - 'docker_images/github-collector.Dockerfile'
-      - '.github/workflows/deploy-azure-function.yml'
+      - '.github/workflows/deploy-gitcollector.yml'
 
 env:
   AZURE_CONTAINER_REGISTRY: gitcollector.azurecr.io

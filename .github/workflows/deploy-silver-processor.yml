@@ -14,7 +14,7 @@ on:
       - '.github/workflows/deploy-silver-processor.yml'
 
 env:
-  AZURE_CONTAINER_REGISTRY: gitcollector.azurecr.io
+  AZURE_CONTAINER_REGISTRY: silverprocessor.azurecr.io
   AZURE_CONTAINER_APP: silverprocessor-cont-app
   CONTAINER_ENVIRONMENT: silverprocessor-cont-app-env
   IMAGE_NAME: silverprocessor
@@ -36,8 +36,8 @@ jobs:
       uses: azure/docker-login@v1
       with:
         login-server: ${{ env.AZURE_CONTAINER_REGISTRY }}
-        username: ${{ secrets.ACR_USERNAME }}
-        password: ${{ secrets.ACR_PASSWORD }}
+        username: ${{ secrets.SILVER_ACR_USERNAME }}
+        password: ${{ secrets.SILVER_ACR_PASSWORD }}
     
     - run: |
         docker build -f docker_images/silver-processor.Dockerfile -t ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
@@ -62,8 +62,8 @@ jobs:
               --name ${{ env.AZURE_CONTAINER_APP }} \
               --resource-group stacktrend \
               --server ${{ env.AZURE_CONTAINER_REGISTRY }} \
-              --username ${{ secrets.ACR_USERNAME }} \
-              --password ${{ secrets.ACR_PASSWORD }}
+              --username ${{ secrets.SILVER_ACR_USERNAME }} \
+              --password ${{ secrets.SILVER_ACR_PASSWORD }}
             
             # Update the container app with new image
             az containerapp update \
@@ -97,8 +97,8 @@ jobs:
             --environment ${{ env.CONTAINER_ENVIRONMENT }} \
             --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
             --registry-server ${{ env.AZURE_CONTAINER_REGISTRY }} \
-            --registry-username ${{ secrets.ACR_USERNAME }} \
-            --registry-password ${{ secrets.ACR_PASSWORD }} \
+            --registry-username ${{ secrets.SILVER_ACR_USERNAME }} \
+            --registry-password ${{ secrets.SILVER_ACR_PASSWORD }} \
             --target-port 80 \
             --ingress external \
             --min-replicas 0 \
