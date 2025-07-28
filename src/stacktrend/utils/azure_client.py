@@ -1,8 +1,8 @@
 """Azure Storage client utilities."""
 
 import json
-from datetime import datetime
-from typing import Dict, Any, Optional
+from datetime import datetime, timedelta
+from typing import Dict, Any, Optional, List
 from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import AzureError
 
@@ -99,4 +99,42 @@ class AzureStorageClient:
             str: Generated blob name with timestamp
         """
         timestamp = datetime.utcnow().strftime("%Y/%m/%d/%H_%M_%S")
-        return f"{prefix}/{timestamp}.{suffix}" 
+        return f"{prefix}/{timestamp}.{suffix}"
+    
+    def list_recent_bronze_files(self, hours_back: int = 24) -> List[str]:
+        """
+        List bronze files created within the specified time window.
+        
+        Args:
+            hours_back: Number of hours to look back for files
+            
+        Returns:
+            List of blob names for recent bronze files
+        """
+        try:
+            container_client = self.blob_service_client.get_container_client(
+                settings.BRONZE_CONTAINER
+            )
+            
+            # Calculate cutoff time
+            cutoff_time = datetime.utcnow() - timedelta(hours=hours_back)
+            
+            recent_files = []
+            blobs = container_client.list_blobs(name_starts_with="github_repositories/")
+            
+            for blob in blobs:
+                # Check if blob was created recently
+                if blob.last_modified and blob.last_modified.replace(tzinfo=None) > cutoff_time:
+                    recent_files.append(blob.name)
+            
+            # Sort by creation time (newest first)
+            recent_files.sort(reverse=True)
+            
+            return recent_files
+            
+        except AzureError as e:
+            print(f"❌ Azure error listing bronze files: {e}")
+            return []
+        except Exception as e:
+            print(f"❌ Error listing bronze files: {e}")
+            return [] 

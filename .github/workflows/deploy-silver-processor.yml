@@ -1,0 +1,119 @@
+name: Deploy Silver Processor to Azure Container Apps
+
+on:
+  push:
+    branches: [ dev ]
+    paths:
+      - 'src/stacktrend/functions/silver_processor/**'
+      - 'src/stacktrend/functions/host.json'
+      - 'src/stacktrend/functions/local.settings.json'
+      - 'src/stacktrend/utils/**'
+      - 'src/stacktrend/config/**'
+      - 'requirements.txt'
+      - 'docker_images/silver-processor.Dockerfile'
+      - '.github/workflows/deploy-silver-processor.yml'
+
+env:
+  AZURE_CONTAINER_REGISTRY: gitcollector.azurecr.io
+  AZURE_CONTAINER_APP: silverprocessor-cont-app
+  CONTAINER_ENVIRONMENT: silverprocessor-cont-app-env
+  IMAGE_NAME: silverprocessor
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 'Checkout GitHub Action'
+      uses: actions/checkout@v3
+
+    - name: 'Login via Azure CLI'
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: 'Build and push image'
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.AZURE_CONTAINER_REGISTRY }}
+        username: ${{ secrets.ACR_USERNAME }}
+        password: ${{ secrets.ACR_PASSWORD }}
+    
+    - run: |
+        docker build -f docker_images/silver-processor.Dockerfile -t ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
+        docker push ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+    - name: 'Deploy to Azure Container Apps'
+      run: |
+        # Check if container app exists
+        if az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend &> /dev/null; then
+          PROVISIONING_STATE=$(az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --query "properties.provisioningState" -o tsv)
+          echo "Container app exists with provisioning state: $PROVISIONING_STATE"
+          
+          if [ "$PROVISIONING_STATE" == "Failed" ]; then
+            echo "Container app is in failed state. Deleting and recreating..."
+            az containerapp delete --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --yes
+            CREATE_NEW_APP=true
+          else
+            echo "Container app is healthy. Configuring registry and updating image..."
+            
+            # Configure registry authentication
+            az containerapp registry set \
+              --name ${{ env.AZURE_CONTAINER_APP }} \
+              --resource-group stacktrend \
+              --server ${{ env.AZURE_CONTAINER_REGISTRY }} \
+              --username ${{ secrets.ACR_USERNAME }} \
+              --password ${{ secrets.ACR_PASSWORD }}
+            
+            # Update the container app with new image
+            az containerapp update \
+              --name ${{ env.AZURE_CONTAINER_APP }} \
+              --resource-group stacktrend \
+              --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            
+            CREATE_NEW_APP=false
+          fi
+        else
+          echo "Container app does not exist."
+          CREATE_NEW_APP=true
+        fi
+
+        # Create new container app if needed
+        if [ "$CREATE_NEW_APP" == "true" ]; then
+          # Create environment if it doesn't exist
+          if ! az containerapp env show --name ${{ env.CONTAINER_ENVIRONMENT }} --resource-group stacktrend &> /dev/null; then
+            echo "Creating Container Apps environment..."
+            az containerapp env create \
+              --name ${{ env.CONTAINER_ENVIRONMENT }} \
+              --resource-group stacktrend \
+              --location eastus
+          fi
+          
+          # Create the container app
+          echo "Creating new container app..."
+          az containerapp create \
+            --name ${{ env.AZURE_CONTAINER_APP }} \
+            --resource-group stacktrend \
+            --environment ${{ env.CONTAINER_ENVIRONMENT }} \
+            --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            --registry-server ${{ env.AZURE_CONTAINER_REGISTRY }} \
+            --registry-username ${{ secrets.ACR_USERNAME }} \
+            --registry-password ${{ secrets.ACR_PASSWORD }} \
+            --target-port 80 \
+            --ingress external \
+            --min-replicas 0 \
+            --max-replicas 5 \
+            --cpu 0.5 \
+            --memory 1Gi \
+            --env-vars AZURE_STORAGE_ACCOUNT_NAME="${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}" \
+                       AZURE_STORAGE_ACCOUNT_KEY="${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}" \
+                       GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+                       AzureWebJobsStorage="DefaultEndpointsProtocol=https;AccountName=${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }};AccountKey=${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }};EndpointSuffix=core.windows.net" \
+                       FUNCTIONS_WORKER_RUNTIME="python" \
+                       WEBSITE_SITE_NAME="${{ env.AZURE_CONTAINER_APP }}" \
+                       FUNCTIONS_EXTENSION_VERSION="~4"
+        fi
+
+        # Show final status
+        echo "Checking final container app status..."
+        az containerapp show --name ${{ env.AZURE_CONTAINER_APP }} --resource-group stacktrend --query "{name:name, provisioningState:properties.provisioningState, fqdn:properties.configuration.ingress.fqdn}" -o table 
