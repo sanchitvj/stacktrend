@@ -6,6 +6,18 @@
       "type": "timerTrigger",
       "direction": "in",
       "schedule": "0 30 */6 * * *"
+    },
+    {
+      "authLevel": "anonymous",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "req", 
+      "methods": ["get", "post"]
+    },
+    {
+      "type": "http",
+      "direction": "out",
+      "name": "$return"
     }
   ]
 } 
