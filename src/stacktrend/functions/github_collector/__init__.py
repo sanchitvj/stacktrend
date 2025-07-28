@@ -1,6 +1,7 @@
 """
 GitHub Data Collector Azure Function
 Runs every 6 hours to collect trending repository data and store in Azure Storage bronze layer.
+Updated: 2025-01-28 - Force redeployment to fix blob naming
 """
 
 import datetime
@@ -22,15 +23,21 @@ except ImportError:
     from stacktrend.config.settings import settings
 
 
-def main(mytimer: func.TimerRequest) -> None:
+def main(mytimer: func.TimerRequest = None, req: func.HttpRequest = None):
     """Main function for GitHub data collection."""
     utc_timestamp = datetime.datetime.utcnow().replace(
         tzinfo=datetime.timezone.utc).isoformat()
 
-    if mytimer.past_due:
-        logging.info('The timer is past due!')
+    # Handle HTTP trigger for testing
+    if req is not None:
+        logging.info('🧪 HTTP trigger received for manual testing')
+        trigger_type = "HTTP"
+    else:
+        if mytimer and mytimer.past_due:
+            logging.info('The timer is past due!')
+        trigger_type = "Timer"
 
-    logging.info('GitHub collector function triggered at %s', utc_timestamp)
+    logging.info(f'GitHub collector function triggered via {trigger_type} at %s', utc_timestamp)
     
     try:
         # Validate configuration
@@ -105,6 +112,23 @@ def main(mytimer: func.TimerRequest) -> None:
         
         logging.info('✅ GitHub collection completed successfully')
         
+        # Return success response for HTTP trigger
+        if req is not None:
+            return func.HttpResponse(
+                f"✅ GitHub collection completed successfully at {utc_timestamp}",
+                status_code=200
+            )
+        
+        # For timer triggers, just return None
+        return None
+        
     except Exception as e:
         logging.error(f'❌ Error in GitHub collector: {str(e)}', exc_info=True)
+        
+        # Return error response for HTTP trigger
+        if req is not None:
+            return func.HttpResponse(
+                f"❌ Error in GitHub collector: {str(e)}",
+                status_code=500
+            )
         raise 
