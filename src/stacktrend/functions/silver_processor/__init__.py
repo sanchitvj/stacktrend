@@ -22,21 +22,13 @@ except ImportError:
     from stacktrend.utils.data_transformer import SilverTransformer
 
 
-def main(mytimer: func.TimerRequest = None, req: func.HttpRequest = None):
+def main(req: func.HttpRequest) -> func.HttpResponse:
     """Main function for silver data processing."""
     utc_timestamp = datetime.datetime.utcnow().replace(
         tzinfo=datetime.timezone.utc).isoformat()
 
-    # Handle HTTP trigger for testing
-    if req is not None:
-        logging.info('🧪 HTTP trigger received for silver processing')
-        trigger_type = "HTTP"
-    else:
-        if mytimer and mytimer.past_due:
-            logging.info('The timer is past due!')
-        trigger_type = "Timer"
-
-    logging.info(f'Silver processor function started via {trigger_type} at {utc_timestamp}')
+    logging.info('HTTP trigger received for silver processing')
+    logging.info(f'Silver processor function started via HTTP at {utc_timestamp}')
     
     try:
         # Validate configuration
@@ -113,22 +105,16 @@ def main(mytimer: func.TimerRequest = None, req: func.HttpRequest = None):
         logging.info('Silver processing completed successfully')
         
         # Return success response for HTTP trigger
-        if req is not None:
-            return func.HttpResponse(
-                f"✅ Silver processing completed successfully at {utc_timestamp}",
-                status_code=200
-            )
-        
-        # For timer triggers, just return None
-        return None
+        return func.HttpResponse(
+            f"Silver processing completed successfully at {utc_timestamp}",
+            status_code=200
+        )
         
     except Exception as e:
         logging.error(f'Error in silver processor: {str(e)}', exc_info=True)
         
         # Return error response for HTTP trigger
-        if req is not None:
-            return func.HttpResponse(
-                f"❌ Error in silver processor: {str(e)}",
-                status_code=500
-            )
-        raise 
+        return func.HttpResponse(
+            f"Error in silver processor: {str(e)}",
+            status_code=500
+        ) 
