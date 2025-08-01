@@ -23,13 +23,15 @@ except ImportError:
     from stacktrend.utils.data_transformer import SilverTransformer
 
 
-def main(req: func.HttpRequest) -> func.HttpResponse:
+def main(mytimer: func.TimerRequest) -> None:
     """Main function for silver data processing."""
     utc_timestamp = datetime.datetime.utcnow().replace(
         tzinfo=datetime.timezone.utc).isoformat()
 
-    logging.info('HTTP trigger received for silver processing')
-    logging.info(f'Silver processor function started via HTTP at {utc_timestamp}')
+    if mytimer.past_due:
+        logging.info('The timer is past due!')
+
+    logging.info(f'Silver processor function started via Timer at {utc_timestamp}')
     
     try:
         # Validate configuration
@@ -112,17 +114,6 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         
         logging.info('Silver processing completed successfully')
         
-        # Return success response for HTTP trigger
-        return func.HttpResponse(
-            f"Silver processing completed successfully at {utc_timestamp}",
-            status_code=200
-        )
-        
     except Exception as e:
         logging.error(f'Error in silver processor: {str(e)}', exc_info=True)
-        
-        # Return error response for HTTP trigger
-        return func.HttpResponse(
-            f"Error in silver processor: {str(e)}",
-            status_code=500
-        )
+        raise
