@@ -1,0 +1,39 @@
+name: Deploy Fabric Notebooks
+
+on:
+  push:
+    branches: [main, dev]
+    paths: ['src/stacktrend/notebooks/**']
+  pull_request:
+    branches: [main]
+    paths: ['src/stacktrend/notebooks/**']
+
+jobs:
+  deploy-notebooks:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        pip install requests msal python-dotenv
+        
+    - name: Deploy to Fabric
+      env:
+        FABRIC_TENANT_ID: ${{ secrets.FABRIC_TENANT_ID }}
+        FABRIC_CLIENT_ID: ${{ secrets.FABRIC_CLIENT_ID }}
+        FABRIC_CLIENT_SECRET: ${{ secrets.FABRIC_CLIENT_SECRET }}
+        FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+      run: |
+        python scripts/deploy_notebooks.py
+        
+    - name: Report deployment status
+      run: |
+        echo "✅ Notebook deployment completed successfully!"
