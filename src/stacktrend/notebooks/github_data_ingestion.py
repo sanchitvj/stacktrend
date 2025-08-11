@@ -147,6 +147,7 @@ else:
         raise Exception(f"Could not get GitHub data: {e}")
 
 print("Proceeding with GitHub data processing...")
+print("CI/CD Pipeline Test: Notebook updated successfully!")
 
 # COMMAND ----------
 # MAGIC %md
