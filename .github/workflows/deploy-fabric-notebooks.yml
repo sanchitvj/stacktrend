@@ -2,11 +2,12 @@ name: Deploy Fabric Notebooks
 
 on:
   push:
-    branches: [main, dev]
-    paths: ['src/stacktrend/notebooks/**']
-  pull_request:
-    branches: [main]
-    paths: ['src/stacktrend/notebooks/**']
+    branches: [dev]
+    paths: 
+      - 'src/stacktrend/notebooks/**'
+      - 'src/stacktrend/utils/deploy_notebooks.py'
+      - 'src/stacktrend/config/settings.py'
+      - '.github/workflows/deploy-fabric-notebooks.yml'
 
 jobs:
   deploy-notebooks:
