@@ -80,38 +80,61 @@ else:
         current_year = datetime.now().year
         last_year = current_year - 1
         
-        # Comprehensive search queries for AI and open source
+        # Smart search queries based on 2024 AI/ML and Data Engineering trends
         search_queries = [
-            # AI/ML Focus
-            "AI+machine-learning+stars:>50+pushed:>2023-01-01",
-            "artificial-intelligence+deep-learning+stars:>30",
-            "LLM+large-language-model+stars:>20",
-            "transformer+neural-network+stars:>20",
+            # Agentic AI & AI Agents
+            "agentic-ai+ai-agents+autonomous+stars:>20+pushed:>2023-01-01",
+            "langchain+autogen+crewai+multi-agent+stars:>50",
+            "ai-assistant+chatbot+conversational-ai+stars:>30",
+            "semantic-kernel+ai-orchestration+stars:>20",
             
-            # Programming Languages
-            "language:python+AI+stars:>50",
-            "language:rust+systems+stars:>30", 
-            "language:go+cloud+stars:>30",
-            "language:javascript+framework+stars:>50",
+            # Generative AI & LLMs
+            "generative-ai+large-language-model+LLM+stars:>50",
+            "ollama+local-llm+open-source-llm+stars:>30",
+            "huggingface+transformers+fine-tuning+stars:>100",
+            "prompt-engineering+prompt-optimization+stars:>20",
             
-            # Open Source Organizations
-            "org:apache+stars:>20",
-            "org:microsoft+AI+stars:>30",
-            "org:google+machine-learning+stars:>30",
-            "org:facebook+AI+stars:>30",
-            "org:openai+stars:>20",
-            "org:anthropic+stars:>10",
+            # Retrieval & Knowledge Systems
+            "retrieval-augmented-generation+RAG+vector-database+stars:>30",
+            "embeddings+semantic-search+similarity+stars:>20",
+            "llamaindex+vector-store+knowledge-base+stars:>50",
+            "pinecone+chroma+weaviate+qdrant+stars:>20",
             
-            # Specific Technologies
-            "tensorflow+pytorch+stars:>30",
-            "huggingface+transformers+stars:>20",
-            "langchain+LLM+stars:>20",
-            "streamlit+gradio+stars:>20",
+            # Computer Vision & Multimodal AI
+            "computer-vision+object-detection+image-processing+stars:>30",
+            "multimodal-ai+vision-language+CLIP+stars:>20",
+            "stable-diffusion+image-generation+diffusion+stars:>50",
+            "opencv+yolo+detectron+stars:>30",
             
-            # Cloud & Infrastructure
-            "kubernetes+docker+stars:>50",
-            "terraform+infrastructure+stars:>30",
-            "aws+azure+gcp+stars:>30"
+            # Machine Learning & Deep Learning
+            "pytorch+tensorflow+jax+deep-learning+stars:>100",
+            "scikit-learn+xgboost+lightgbm+machine-learning+stars:>50",
+            "reinforcement-learning+RL+gym+stable-baselines+stars:>20",
+            "federated-learning+distributed-ml+stars:>10",
+            
+            # Data Engineering & MLOps
+            "data-engineering+ETL+data-pipeline+stars:>30",
+            "apache-airflow+prefect+dagster+workflow+stars:>50",
+            "dbt+data-transformation+analytics-engineering+stars:>100",
+            "mlops+model-deployment+mlflow+kubeflow+stars:>30",
+            
+            # Real-time & Streaming
+            "apache-kafka+stream-processing+real-time+stars:>50",
+            "apache-spark+big-data+distributed-computing+stars:>100",
+            "flink+storm+streaming+event-driven+stars:>20",
+            "redis+message-queue+pub-sub+stars:>30",
+            
+            # Data Infrastructure & Observability
+            "data-observability+data-quality+monitoring+stars:>20",
+            "airbyte+fivetran+data-integration+ELT+stars:>30",
+            "snowflake+databricks+data-warehouse+lakehouse+stars:>20",
+            "prometheus+grafana+observability+monitoring+stars:>50",
+            
+            # Cloud-Native & DevOps
+            "kubernetes+cloud-native+microservices+stars:>100",
+            "terraform+infrastructure-as-code+IaC+stars:>50",
+            "docker+containerization+orchestration+stars:>100",
+            "github-actions+ci-cd+automation+stars:>30"
         ]
         
         all_repositories = []

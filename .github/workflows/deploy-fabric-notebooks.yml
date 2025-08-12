@@ -32,7 +32,7 @@ jobs:
         FABRIC_CLIENT_SECRET: ${{ secrets.FABRIC_CLIENT_SECRET }}
         FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
       run: |
-        python scripts/deploy_notebooks.py
+        python -m src.stacktrend.utils.deploy_notebooks
         
     - name: Report deployment status
       run: |

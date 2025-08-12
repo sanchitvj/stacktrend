@@ -56,6 +56,12 @@ class Settings:
     POWERBI_WORKSPACE_ID = os.getenv("POWERBI_WORKSPACE_ID")  # Can be same as Fabric workspace
     POWERBI_DATASET_NAME = "technology_trends_dataset"
     
+    # Azure OpenAI Configuration for LLM Classification
+    AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+    AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+    AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+    AZURE_OPENAI_MODEL = os.getenv("AZURE_OPENAI_MODEL", "gpt-4.1-mini")
+    
     @classmethod
     def validate(cls):
         """Validate that required settings are present."""

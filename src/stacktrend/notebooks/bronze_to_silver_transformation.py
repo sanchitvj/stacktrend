@@ -33,7 +33,7 @@ import pyspark.sql.functions as F
 from pyspark.sql.types import StringType
 from datetime import datetime
 
-# Initialize Spark Session (for Fabric notebooks)
+
 spark = SparkSession.builder.appName("Bronze_to_Silver_Transformation").getOrCreate()
 
 # COMMAND ----------
@@ -51,93 +51,183 @@ print(f"Processing date: {PROCESSING_DATE}")
 
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ## Technology Taxonomy Mapping
+# MAGIC ## LLM-Based Technology Classification
 
 # COMMAND ----------
-# Define technology category mapping
-TECHNOLOGY_CATEGORIES = {
-    # Programming Languages
-    "python": "programming_language",
-    "javascript": "programming_language", 
-    "typescript": "programming_language",
-    "java": "programming_language",
-    "c#": "programming_language",
-    "go": "programming_language",
-    "rust": "programming_language",
-    "kotlin": "programming_language",
-    "swift": "programming_language",
-    "php": "programming_language",
-    "ruby": "programming_language",
-    "c++": "programming_language",
-    "c": "programming_language",
-    "scala": "programming_language",
-    "r": "programming_language",
-    
-    # Frameworks & Libraries
-    "react": "frontend_library",
-    "vue": "frontend_library", 
-    "angular": "frontend_library",
-    "svelte": "frontend_library",
-    "django": "backend_framework",
-    "flask": "backend_framework",
-    "fastapi": "backend_framework",
-    "express": "backend_framework",
-    "spring": "backend_framework",
-    "laravel": "backend_framework",
-    
-    # Data & AI/ML
-    "tensorflow": "ai_ml_library",
-    "pytorch": "ai_ml_library",
-    "scikit-learn": "ai_ml_library",
-    "pandas": "data_tool",
-    "numpy": "data_tool",
-    "spark": "data_tool",
-    "kafka": "data_tool",
-    
-    # Databases
-    "postgresql": "database",
-    "mysql": "database",
-    "mongodb": "database",
-    "redis": "database",
-    "elasticsearch": "database",
-    
-    # DevOps
-    "docker": "devops_tool",
-    "kubernetes": "devops_tool",
-    "terraform": "devops_tool",
-    "ansible": "devops_tool",
-    
-    # Default category
-    "other": "other"
-}
+# Import LLM classifier and settings
+try:
+    from src.stacktrend.utils.llm_classifier import LLMRepositoryClassifier, create_repository_data_from_dict
+    from src.stacktrend.config.settings import settings
+    print("Successfully imported LLM classifier")
+except ImportError as e:
+    print(f"Import error (expected in Fabric): {e}")
+    # Fallback for Fabric environment - will implement simple classification
+    LLMRepositoryClassifier = None
+    settings = None
 
-# Create UDF for technology categorization
-def categorize_technology(language, topics, name):
-    """Categorize technology based on language, topics, and repository name."""
-    if not language:
-        language = ""
+def extract_language_distribution(language, topics, name):
+    """Extract programming languages used and their estimated distribution."""
+    languages = {}
     
-    language_lower = language.lower()
-    name_lower = name.lower() if name else ""
-    topics_lower = [topic.lower() for topic in (topics or [])]
+    # Primary language gets 70% if specified
+    if language and language.strip() and language.lower() not in ['null', 'none', '']:
+        languages[language] = 70.0
     
-    # Check direct language mapping
-    if language_lower in TECHNOLOGY_CATEGORIES:
-        return TECHNOLOGY_CATEGORIES[language_lower]
+    # Check topics for additional languages
+    programming_languages = {
+        'python': 'Python', 'javascript': 'JavaScript', 'typescript': 'TypeScript',
+        'java': 'Java', 'go': 'Go', 'rust': 'Rust', 'cpp': 'C++', 'c++': 'C++',
+        'csharp': 'C#', 'c#': 'C#', 'php': 'PHP', 'ruby': 'Ruby', 'swift': 'Swift',
+        'kotlin': 'Kotlin', 'scala': 'Scala', 'r': 'R', 'julia': 'Julia',
+        'shell': 'Shell', 'bash': 'Shell', 'dockerfile': 'Dockerfile',
+        'yaml': 'YAML', 'json': 'JSON', 'sql': 'SQL'
+    }
     
-    # Check topics for framework/library indicators
-    for topic in topics_lower:
-        if topic in TECHNOLOGY_CATEGORIES:
-            return TECHNOLOGY_CATEGORIES[topic]
+    topic_languages = []
+    for topic in (topics or []):
+        topic_lower = topic.lower()
+        for lang_key, lang_name in programming_languages.items():
+            if lang_key in topic_lower:
+                topic_languages.append(lang_name)
     
-    # Check repository name for patterns
-    for tech, category in TECHNOLOGY_CATEGORIES.items():
-        if tech in name_lower:
-            return category
+    # Distribute remaining percentage among topic languages
+    if topic_languages:
+        remaining_percent = 30.0 if languages else 100.0
+        percent_per_lang = remaining_percent / len(topic_languages)
+        for lang in topic_languages:
+            if lang not in languages:
+                languages[lang] = percent_per_lang
     
-    return "other"
+    # If no languages found, mark as unknown
+    if not languages:
+        languages['Unknown'] = 100.0
+    
+    # Normalize to 100%
+    total = sum(languages.values())
+    if total > 0:
+        languages = {k: round((v / total) * 100, 1) for k, v in languages.items()}
+    
+    return languages
 
-categorize_tech_udf = F.udf(categorize_technology, StringType())
+def classify_repositories_with_llm(repositories_df):
+    """
+    Use LLM to classify repositories into smart categories
+    """
+    if not LLMRepositoryClassifier or not settings:
+        print("LLM classifier not available, using fallback classification")
+        return add_fallback_classification(repositories_df)
+    
+    try:
+        # Convert Spark DataFrame to list of repository data
+        repo_data_list = []
+        repos_collected = repositories_df.collect()
+        
+        for row in repos_collected:
+            repo_data = create_repository_data_from_dict({
+                'repository_id': row['repository_id'],
+                'name': row['name'],
+                'full_name': row['full_name'],
+                'description': row.get('description'),
+                'topics': row.get('topics', []),
+                'language': row.get('language'),
+                'stargazers_count': row.get('stargazers_count', 0)
+            })
+            repo_data_list.append(repo_data)
+        
+        # Initialize LLM classifier
+        classifier = LLMRepositoryClassifier(
+            api_key=settings.AZURE_OPENAI_API_KEY,
+            endpoint=settings.AZURE_OPENAI_ENDPOINT,
+            api_version=settings.AZURE_OPENAI_API_VERSION,
+            model=settings.AZURE_OPENAI_MODEL
+        )
+        
+        # Classify repositories
+        print(f"Classifying {len(repo_data_list)} repositories with LLM...")
+        classifications = classifier.classify_repositories_sync(repo_data_list)
+        
+        # Convert results back to Spark DataFrame format
+        classification_map = {
+            c.repo_id: {
+                'primary_category': c.primary_category,
+                'subcategory': c.subcategory,
+                'confidence': c.confidence
+            }
+            for c in classifications
+        }
+        
+        # Add classifications to original DataFrame
+        def add_classification(repo_id):
+            classification = classification_map.get(str(repo_id), {
+                'primary_category': 'Other',
+                'subcategory': 'unknown',
+                'confidence': 0.1
+            })
+            return classification['primary_category']
+        
+        def add_subcategory(repo_id):
+            classification = classification_map.get(str(repo_id), {
+                'primary_category': 'Other',
+                'subcategory': 'unknown',
+                'confidence': 0.1
+            })
+            return classification['subcategory']
+        
+        def add_confidence(repo_id):
+            classification = classification_map.get(str(repo_id), {
+                'primary_category': 'Other',
+                'subcategory': 'unknown',
+                'confidence': 0.1
+            })
+            return float(classification['confidence'])
+        
+        add_classification_udf = F.udf(add_classification, StringType())
+        add_subcategory_udf = F.udf(add_subcategory, StringType())
+        add_confidence_udf = F.udf(add_confidence, F.DoubleType())
+        
+        return (repositories_df
+                .withColumn("technology_category", add_classification_udf(F.col("repository_id")))
+                .withColumn("technology_subcategory", add_subcategory_udf(F.col("repository_id")))
+                .withColumn("classification_confidence", add_confidence_udf(F.col("repository_id"))))
+        
+    except Exception as e:
+        print(f"LLM classification failed: {e}")
+        print("Falling back to simple classification")
+        return add_fallback_classification(repositories_df)
+
+def add_fallback_classification(repositories_df):
+    """Simple fallback classification when LLM is not available"""
+    def simple_classify(name, topics, description):
+        name_lower = (name or "").lower()
+        topics_lower = [topic.lower() for topic in (topics or [])]
+        desc_lower = (description or "").lower()
+        
+        text_to_check = f"{name_lower} {' '.join(topics_lower)} {desc_lower}"
+        
+        # Simple keyword-based classification
+        if any(keyword in text_to_check for keyword in ['ai', 'llm', 'gpt', 'agent', 'langchain']):
+            return 'AI'
+        elif any(keyword in text_to_check for keyword in ['ml', 'tensorflow', 'pytorch', 'sklearn']):
+            return 'ML'
+        elif any(keyword in text_to_check for keyword in ['data', 'etl', 'pipeline', 'airflow']):
+            return 'DataEngineering'
+        elif any(keyword in text_to_check for keyword in ['database', 'sql', 'mongodb', 'redis']):
+            return 'Database'
+        elif any(keyword in text_to_check for keyword in ['web', 'react', 'vue', 'api', 'frontend']):
+            return 'WebDev'
+        elif any(keyword in text_to_check for keyword in ['devops', 'docker', 'kubernetes', 'ci']):
+            return 'DevOps'
+        else:
+            return 'Other'
+    
+    simple_classify_udf = F.udf(simple_classify, StringType())
+    
+    return (repositories_df
+            .withColumn("technology_category", simple_classify_udf(F.col("name"), F.col("topics"), F.col("description")))
+            .withColumn("technology_subcategory", F.lit("general"))
+            .withColumn("classification_confidence", F.lit(0.5)))
+
+extract_lang_dist_udf = F.udf(extract_language_distribution, F.MapType(StringType(), F.DoubleType()))
 
 # COMMAND ----------
 # MAGIC %md
@@ -183,7 +273,7 @@ except Exception as e:
 
 # COMMAND ----------
 # Clean and standardize the data
-silver_df = (bronze_df
+silver_df_basic = (bronze_df
     # Basic cleaning
     .withColumn("name_clean", F.regexp_replace(F.col("name"), r"[^\w\-\.]", ""))
     .withColumn("description_clean", 
@@ -196,11 +286,11 @@ silver_df = (bronze_df
                 F.when(F.col("language").isNotNull(), F.lower(F.trim(F.col("language"))))
                 .otherwise("unknown"))
     
-    # Technology categorization
-    .withColumn("technology_category",
-                categorize_tech_udf(F.col("primary_language"), 
-                                   F.col("topics"), 
-                                   F.col("name")))
+    # Language distribution (as key-value map)
+    .withColumn("language_distribution",
+                extract_lang_dist_udf(F.col("primary_language"),
+                                     F.col("topics"),
+                                     F.col("name")))
     
     # Clean topics array
     .withColumn("topics_standardized",
@@ -234,6 +324,11 @@ silver_df = (bronze_df
 )
 
 print("Applied basic cleaning and standardization")
+
+# Apply LLM-based classification
+print("Starting LLM-based technology classification...")
+silver_df = classify_repositories_with_llm(silver_df_basic)
+print("LLM classification completed")
 
 # COMMAND ----------
 # MAGIC %md 
@@ -359,7 +454,10 @@ final_silver_df = silver_validated_df.select(
     "updated_at", 
     "pushed_at",
     "primary_language",
-    "technology_category",
+    "technology_category",          # LLM-classified primary category
+    "technology_subcategory",       # LLM-classified subcategory  
+    "classification_confidence",    # LLM classification confidence
+    "language_distribution",        # Programming languages as key-value pairs
     "stargazers_count",
     "watchers_count",
     "forks_count",
