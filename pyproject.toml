@@ -12,13 +12,19 @@ license = { text = "MIT" }
 authors = [{ name = "Sanchit Vijay", email = "sanchitvj1026@gmail.com" }, ]
 
 dependencies = [
-    "azure-functions",
-    "azure-storage-blob",
-    "azure-identity",
-    "requests",
-    "PyGithub",
-    "pandas",
-    "python-dotenv",
+    "msal>=1.24.0",
+    "requests>=2.31.0",
+    "azure-core>=1.29.0",
+    "azure-mgmt-datafactory>=3.0.0",
+    "PyGithub>=1.59.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "pyspark>=3.4.0",
+    "pyarrow>=12.0.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "openai>=1.12.0",
+    "tenacity>=8.2.0",
 ]
 
 [project.urls]

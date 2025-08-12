@@ -209,3 +209,6 @@ __marimo__/
 
 .cursor/
 **.mdc
+test_data/**
+
+docs/**
