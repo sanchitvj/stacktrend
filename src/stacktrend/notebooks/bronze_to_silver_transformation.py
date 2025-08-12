@@ -30,7 +30,10 @@ Usage in Fabric:
 # Import required libraries
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
-from pyspark.sql.types import StringType
+from pyspark.sql.types import StringType, DoubleType, MapType
+import os
+import sys
+import subprocess
 from datetime import datetime
 
 
@@ -54,16 +57,23 @@ print(f"Processing date: {PROCESSING_DATE}")
 # MAGIC ## LLM-Based Technology Classification
 
 # COMMAND ----------
-# Import LLM classifier and settings
-try:
-    from src.stacktrend.utils.llm_classifier import LLMRepositoryClassifier, create_repository_data_from_dict
-    from src.stacktrend.config.settings import settings
-    print("Successfully imported LLM classifier")
-except ImportError as e:
-    print(f"Import error (expected in Fabric): {e}")
-    # Fallback for Fabric environment - will implement simple classification
-    LLMRepositoryClassifier = None
-    settings = None
+def ensure_stacktrend_imports():
+    """Install and import stacktrend package strictly inside a function to satisfy linters."""
+    github_read_token = os.environ.get("GITHUB_READ_TOKEN")
+    repo_ref = os.environ.get("STACKTREND_GIT_REF", "dev")
+    if github_read_token:
+        install_url = f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@{repo_ref}"
+    else:
+        install_url = f"git+https://github.com/sanchitvj/stacktrend.git@{repo_ref}"
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", install_url])
+
+    from stacktrend.utils.llm_classifier import (
+        LLMRepositoryClassifier as _LLMRepositoryClassifier,
+        create_repository_data_from_dict as _create_repository_data_from_dict,
+    )
+    from stacktrend.config.settings import settings as _settings
+
+    return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
 
 def extract_language_distribution(language, topics, name):
     """Extract programming languages used and their estimated distribution."""
@@ -113,9 +123,8 @@ def classify_repositories_with_llm(repositories_df):
     """
     Use LLM to classify repositories into smart categories
     """
-    if not LLMRepositoryClassifier or not settings:
-        print("LLM classifier not available, using fallback classification")
-        return add_fallback_classification(repositories_df)
+    allow_fallback = os.environ.get("ALLOW_FALLBACK_CLASSIFIER", "false").lower() == "true"
+    LLMRepositoryClassifier, create_repository_data_from_dict, settings = ensure_stacktrend_imports()
     
     try:
         # Convert Spark DataFrame to list of repository data
@@ -183,7 +192,7 @@ def classify_repositories_with_llm(repositories_df):
         
         add_classification_udf = F.udf(add_classification, StringType())
         add_subcategory_udf = F.udf(add_subcategory, StringType())
-        add_confidence_udf = F.udf(add_confidence, F.DoubleType())
+        add_confidence_udf = F.udf(add_confidence, DoubleType())
         
         return (repositories_df
                 .withColumn("technology_category", add_classification_udf(F.col("repository_id")))
@@ -191,9 +200,11 @@ def classify_repositories_with_llm(repositories_df):
                 .withColumn("classification_confidence", add_confidence_udf(F.col("repository_id"))))
         
     except Exception as e:
-        print(f"LLM classification failed: {e}")
-        print("Falling back to simple classification")
-        return add_fallback_classification(repositories_df)
+        print(f"Error classifying repositories with LLM: {e}")
+        if allow_fallback:
+            print("⚠️ Using fallback classifier due to LLM error")
+            return add_fallback_classification(repositories_df)
+        raise
 
 def add_fallback_classification(repositories_df):
     """Simple fallback classification when LLM is not available"""
@@ -227,7 +238,9 @@ def add_fallback_classification(repositories_df):
             .withColumn("technology_subcategory", F.lit("general"))
             .withColumn("classification_confidence", F.lit(0.5)))
 
-extract_lang_dist_udf = F.udf(extract_language_distribution, F.MapType(StringType(), F.DoubleType()))
+extract_lang_dist_udf = F.udf(
+    extract_language_distribution, MapType(StringType(), DoubleType())
+)
 
 # COMMAND ----------
 # MAGIC %md
