@@ -7,9 +7,8 @@ on:
       - 'src/stacktrend/functions/silver_processor/**'
       - 'src/stacktrend/functions/host.json'
       - 'src/stacktrend/functions/local.settings.json'
-      - 'src/stacktrend/utils/**'
-      - 'src/stacktrend/config/**'
-      - 'requirements.txt'
+      # - 'src/stacktrend/utils/**'
+      # - 'src/stacktrend/config/**'
       - 'docker_images/silver-processor.Dockerfile'
       - '.github/workflows/deploy-silver-processor.yml'
 

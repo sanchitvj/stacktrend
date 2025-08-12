@@ -7,9 +7,8 @@ on:
       - 'src/stacktrend/functions/github_collector/**'
       - 'src/stacktrend/functions/host.json'
       - 'src/stacktrend/functions/local.settings.json'
-      - 'src/stacktrend/utils/**'
-      - 'src/stacktrend/config/**'
-      - 'requirements.txt'
+      # - 'src/stacktrend/utils/**'
+      # - 'src/stacktrend/config/**'
       - 'docker_images/github-collector.Dockerfile'
       - '.github/workflows/deploy-gitcollector.yml'
 
