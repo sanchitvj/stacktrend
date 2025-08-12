@@ -121,6 +121,11 @@ class FabricNotebookDeployer:
         notebook = {
             "nbformat": 4,
             "nbformat_minor": 2,
+            "metadata": {
+                "language_info": {
+                    "name": "python"
+                }
+            },
             "cells": []
         }
         
