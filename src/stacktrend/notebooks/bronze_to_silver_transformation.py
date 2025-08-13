@@ -106,6 +106,18 @@ def ensure_stacktrend_imports():
             install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@main")
         install_attempts.append("git+https://github.com/sanchitvj/stacktrend.git@main")
         
+        # First, upgrade critical dependencies
+        print("Upgrading critical dependencies...")
+        try:
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir",
+                "typing_extensions>=4.8.0", "pydantic>=2.0.0", "openai>=1.0.0"
+            ], timeout=120)
+            print("✅ Successfully upgraded dependencies")
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to upgrade dependencies: {e}")
+        
+        # Now install stacktrend package
         for i, install_url in enumerate(install_attempts):
             try:
                 print(f"Attempt {i+1}: Installing from {install_url}")
@@ -120,13 +132,40 @@ def ensure_stacktrend_imports():
                     raise Exception("All installation attempts failed")
                 continue
 
-        from stacktrend.utils.llm_classifier import (
-            LLMRepositoryClassifier as _LLMRepositoryClassifier,
-            create_repository_data_from_dict as _create_repository_data_from_dict,
-        )
-        from stacktrend.config.settings import settings as _settings
-
-        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+        # Try importing with restart if needed
+        try:
+            from stacktrend.utils.llm_classifier import (
+                LLMRepositoryClassifier as _LLMRepositoryClassifier,
+                create_repository_data_from_dict as _create_repository_data_from_dict,
+            )
+            from stacktrend.config.settings import settings as _settings
+            print("✅ Successfully imported stacktrend modules")
+            return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+            
+        except ImportError as import_error:
+            print(f"❌ Import error after installation: {import_error}")
+            print("This might be due to dependency conflicts in the current Python session")
+            
+            # Try one more dependency upgrade with force-reinstall
+            print("Attempting force reinstall of critical dependencies...")
+            try:
+                subprocess.check_call([
+                    sys.executable, "-m", "pip", "install", "--force-reinstall", "--no-cache-dir",
+                    "typing_extensions>=4.9.0", "pydantic>=2.5.0"
+                ], timeout=120)
+                
+                # Try import again
+                from stacktrend.utils.llm_classifier import (
+                    LLMRepositoryClassifier as _LLMRepositoryClassifier,
+                    create_repository_data_from_dict as _create_repository_data_from_dict,
+                )
+                from stacktrend.config.settings import settings as _settings
+                print("✅ Successfully imported after force reinstall")
+                return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+                
+            except Exception as retry_error:
+                print(f"❌ Force reinstall also failed: {retry_error}")
+                raise ImportError(f"Cannot import stacktrend modules due to dependency conflicts: {import_error}")
     
     except Exception as e:
         print(f"❌ CRITICAL: Failed to install stacktrend package: {e}")
