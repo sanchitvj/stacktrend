@@ -184,16 +184,53 @@ def ensure_stacktrend_imports():
             install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@main")
         install_attempts.append("git+https://github.com/sanchitvj/stacktrend.git@main")
         
-        # First, upgrade critical dependencies
-        print("Upgrading critical dependencies...")
+        # First, upgrade critical dependencies with force reload
+        print("Upgrading critical dependencies with force reload...")
         try:
+            # Force uninstall and reinstall to avoid cached imports
+            subprocess.run([
+                sys.executable, "-m", "pip", "uninstall", "-y", 
+                "typing_extensions", "pydantic", "openai", "typing-inspection"
+            ], timeout=60, capture_output=True, text=True)
+            
+            print("Uninstalled old versions, installing new ones...")
             result = subprocess.run([
-                sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir",
-                "typing_extensions>=4.8.0", "pydantic>=2.0.0", "openai>=1.0.0"
+                sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                "typing_extensions>=4.12.0", "pydantic>=2.8.0", "openai>=1.35.0"
             ], timeout=120, capture_output=True, text=True)
             
             if result.returncode == 0:
-                print("Successfully upgraded dependencies")
+                print("Successfully upgraded dependencies with force reload")
+                
+                # Force clear all related modules from memory
+                import sys
+                modules_to_clear = [
+                    'typing_extensions', 'pydantic', 'openai', 'typing_inspection',
+                    'typing_inspection.introspection', 'typing_inspection.typing_objects'
+                ]
+                
+                print("Clearing modules from memory to force fresh imports...")
+                for module_name in modules_to_clear:
+                    if module_name in sys.modules:
+                        print(f"Removing {module_name} from sys.modules")
+                        try:
+                            del sys.modules[module_name]
+                        except Exception as clear_error:
+                            print(f"Could not clear {module_name}: {clear_error}")
+                
+                # Also clear any submodules
+                modules_to_remove = []
+                for module_name in sys.modules.keys():
+                    if any(module_name.startswith(prefix) for prefix in ['typing_extensions', 'pydantic', 'openai', 'typing_inspection']):
+                        modules_to_remove.append(module_name)
+                
+                for module_name in modules_to_remove:
+                    try:
+                        del sys.modules[module_name]
+                        print(f"Cleared submodule: {module_name}")
+                    except Exception:
+                        pass
+                            
             else:
                 print(f"Warning: Dependency upgrade failed with exit code {result.returncode}")
                 if result.stderr:
@@ -257,19 +294,38 @@ def ensure_stacktrend_imports():
             print(f"❌ Import error after installation: {import_error}")
             print("This might be due to dependency conflicts in the current Python session")
             
-            # Try one more dependency upgrade with force-reinstall
-            print("Attempting force reinstall of critical dependencies...")
+            # Try one more dependency upgrade with complete environment reset
+            print("Attempting complete dependency reset...")
             try:
+                # Uninstall everything first
+                subprocess.run([
+                    sys.executable, "-m", "pip", "uninstall", "-y", 
+                    "typing_extensions", "pydantic", "openai", "typing-inspection", "stacktrend"
+                ], timeout=60, capture_output=True, text=True)
+                
+                # Clear all related modules from memory
+                import sys
+                all_modules_to_clear = list(sys.modules.keys())
+                for module_name in all_modules_to_clear:
+                    if any(prefix in module_name for prefix in ['typing_extensions', 'pydantic', 'openai', 'typing_inspection', 'stacktrend']):
+                        try:
+                            del sys.modules[module_name]
+                        except Exception:
+                            pass
+                
+                # Install with specific compatible versions
                 result = subprocess.run([
-                    sys.executable, "-m", "pip", "install", "--force-reinstall", "--no-cache-dir",
-                    "typing_extensions>=4.9.0", "pydantic>=2.5.0"
+                    sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                    "typing_extensions==4.12.2", "pydantic==2.8.2", "openai==1.35.15"
                 ], timeout=120, capture_output=True, text=True)
                 
                 if result.returncode != 0:
-                    print(f"Force reinstall failed with exit code {result.returncode}")
+                    print(f"Complete reset failed with exit code {result.returncode}")
                     if result.stderr:
-                        print(f"Reinstall error: {result.stderr[:200]}")
-                    raise Exception("Force reinstall failed")
+                        print(f"Reset error: {result.stderr[:200]}")
+                    raise Exception("Complete dependency reset failed")
+                else:
+                    print("Complete dependency reset successful")
                 
                 # Try import again
                 from stacktrend.utils.llm_classifier import (
