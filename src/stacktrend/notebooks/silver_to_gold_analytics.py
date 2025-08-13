@@ -1,3 +1,12 @@
+# COMMAND ----------
+# MAGIC %%configure -f
+# MAGIC {
+# MAGIC     "defaultLakehouse": {
+# MAGIC         "name": "stacktrend_gold_lh"
+# MAGIC     }
+# MAGIC }
+
+# COMMAND ----------
 """
 Silver to Gold Analytics Transformation Notebook
 Microsoft Fabric Notebook for generating analytics and metrics from Silver layer data
@@ -24,14 +33,6 @@ Usage in Fabric:
 # MAGIC 3. **Community Health Indices**: Repository health and sustainability metrics
 # MAGIC 4. **Trend Analysis**: Growth patterns and velocity measurements
 # MAGIC 5. **Comparative Rankings**: Technology popularity and growth rankings
-
-# COMMAND ----------
-# MAGIC %%configure -f
-# MAGIC {
-# MAGIC     "defaultLakehouse": {
-# MAGIC         "name": "stacktrend_gold_lh"
-# MAGIC     }
-# MAGIC }
 
 # COMMAND ----------
 # Mount additional lakehouses for cross-lakehouse access using secure context

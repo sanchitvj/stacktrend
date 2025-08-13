@@ -1,3 +1,12 @@
+# COMMAND ----------
+# MAGIC %%configure -f
+# MAGIC {
+# MAGIC     "defaultLakehouse": {
+# MAGIC         "name": "stacktrend_silver_lh"
+# MAGIC     }
+# MAGIC }
+
+# COMMAND ----------
 """
 Bronze to Silver Transformation Notebook
 Microsoft Fabric Notebook for cleaning and standardizing GitHub repository data
@@ -25,14 +34,6 @@ Usage in Fabric:
 # MAGIC 4. **Metric Calculations**: Calculate velocity and health scores
 # MAGIC 5. **Quality Validation**: Apply data quality rules
 # MAGIC 6. **Silver Storage**: Write to Silver lakehouse with Delta format
-
-# COMMAND ----------
-# MAGIC %%configure -f
-# MAGIC {
-# MAGIC     "defaultLakehouse": {
-# MAGIC         "name": "stacktrend_silver_lh"
-# MAGIC     }
-# MAGIC }
 
 # COMMAND ----------
 # Mount additional lakehouses for cross-lakehouse access using secure context

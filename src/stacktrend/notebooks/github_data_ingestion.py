@@ -1,3 +1,12 @@
+# COMMAND ----------
+# MAGIC %%configure -f
+# MAGIC {
+# MAGIC     "defaultLakehouse": {
+# MAGIC         "name": "stacktrend_bronze_lh"
+# MAGIC     }
+# MAGIC }
+
+# COMMAND ----------
 """
 GitHub Data Ingestion Notebook
 Microsoft Fabric Notebook for ingesting GitHub API data into Bronze lakehouse
@@ -16,14 +25,6 @@ Usage in Fabric Data Factory:
 # MAGIC # GitHub Data Ingestion to Bronze Layer
 # MAGIC 
 # MAGIC This notebook ingests GitHub API response data and saves it to the Bronze lakehouse in Delta format.
-
-# COMMAND ----------
-# MAGIC %%configure -f
-# MAGIC {
-# MAGIC     "defaultLakehouse": {
-# MAGIC         "name": "stacktrend_bronze_lh"
-# MAGIC     }
-# MAGIC }
 
 # COMMAND ----------
 # Import required libraries
