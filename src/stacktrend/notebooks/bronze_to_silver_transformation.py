@@ -187,6 +187,8 @@ def ensure_stacktrend_imports():
         # First, upgrade critical dependencies with force reload
         print("Upgrading critical dependencies with force reload...")
         try:
+            import sys
+            
             # Force uninstall and reinstall to avoid cached imports
             subprocess.run([
                 sys.executable, "-m", "pip", "uninstall", "-y", 
@@ -203,7 +205,6 @@ def ensure_stacktrend_imports():
                 print("Successfully upgraded dependencies with force reload")
                 
                 # Force clear all related modules from memory
-                import sys
                 modules_to_clear = [
                     'typing_extensions', 'pydantic', 'openai', 'typing_inspection',
                     'typing_inspection.introspection', 'typing_inspection.typing_objects'
@@ -244,6 +245,9 @@ def ensure_stacktrend_imports():
                 print(f"Attempt {i+1}: Installing from {install_url}")
                 
                 # Different approaches for different URL types
+                import sys
+                import os
+                
                 if install_url.endswith('.zip'):
                     # Direct ZIP download - no git involved
                     cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", install_url]
@@ -253,7 +257,6 @@ def ensure_stacktrend_imports():
                            "--quiet", "--no-warn-script-location", install_url]
                 
                 # Redirect stderr to devnull for git operations
-                import os
                 with open(os.devnull, 'w') as devnull:
                     result = subprocess.run(cmd, timeout=300, stdout=subprocess.PIPE, 
                                           stderr=devnull if 'git+' in install_url else subprocess.PIPE, 
@@ -297,6 +300,8 @@ def ensure_stacktrend_imports():
             # Try one more dependency upgrade with complete environment reset
             print("Attempting complete dependency reset...")
             try:
+                import sys
+                
                 # Uninstall everything first
                 subprocess.run([
                     sys.executable, "-m", "pip", "uninstall", "-y", 
@@ -304,7 +309,6 @@ def ensure_stacktrend_imports():
                 ], timeout=60, capture_output=True, text=True)
                 
                 # Clear all related modules from memory
-                import sys
                 all_modules_to_clear = list(sys.modules.keys())
                 for module_name in all_modules_to_clear:
                     if any(prefix in module_name for prefix in ['typing_extensions', 'pydantic', 'openai', 'typing_inspection', 'stacktrend']):
