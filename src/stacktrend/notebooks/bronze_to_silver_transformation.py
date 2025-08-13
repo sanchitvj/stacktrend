@@ -59,21 +59,29 @@ print(f"Processing date: {PROCESSING_DATE}")
 # COMMAND ----------
 def ensure_stacktrend_imports():
     """Install and import stacktrend package strictly inside a function to satisfy linters."""
-    github_read_token = os.environ.get("GITHUB_READ_TOKEN")
-    repo_ref = os.environ.get("STACKTREND_GIT_REF", "dev")
-    if github_read_token:
-        install_url = f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@{repo_ref}"
-    else:
-        install_url = f"git+https://github.com/sanchitvj/stacktrend.git@{repo_ref}"
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", install_url])
+    try:
+        github_read_token = os.environ.get("GITHUB_READ_TOKEN")
+        repo_ref = os.environ.get("STACKTREND_GIT_REF", "dev")
+        if github_read_token:
+            install_url = f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@{repo_ref}"
+        else:
+            install_url = f"git+https://github.com/sanchitvj/stacktrend.git@{repo_ref}"
+        
+        print(f"Installing stacktrend package from: {install_url}")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", install_url])
 
-    from stacktrend.utils.llm_classifier import (
-        LLMRepositoryClassifier as _LLMRepositoryClassifier,
-        create_repository_data_from_dict as _create_repository_data_from_dict,
-    )
-    from stacktrend.config.settings import settings as _settings
+        from stacktrend.utils.llm_classifier import (
+            LLMRepositoryClassifier as _LLMRepositoryClassifier,
+            create_repository_data_from_dict as _create_repository_data_from_dict,
+        )
+        from stacktrend.config.settings import settings as _settings
 
-    return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+    
+    except Exception as e:
+        print(f"Failed to install stacktrend package: {e}")
+        print("This might be due to network restrictions or Python version compatibility")
+        raise
 
 def extract_language_distribution(language, topics, name):
     """Extract programming languages used and their estimated distribution."""
@@ -123,7 +131,6 @@ def classify_repositories_with_llm(repositories_df):
     """
     Use LLM to classify repositories into smart categories
     """
-    allow_fallback = os.environ.get("ALLOW_FALLBACK_CLASSIFIER", "false").lower() == "true"
     LLMRepositoryClassifier, create_repository_data_from_dict, settings = ensure_stacktrend_imports()
     
     try:
@@ -201,42 +208,9 @@ def classify_repositories_with_llm(repositories_df):
         
     except Exception as e:
         print(f"Error classifying repositories with LLM: {e}")
-        if allow_fallback:
-            print("⚠️ Using fallback classifier due to LLM error")
-            return add_fallback_classification(repositories_df)
         raise
 
-def add_fallback_classification(repositories_df):
-    """Simple fallback classification when LLM is not available"""
-    def simple_classify(name, topics, description):
-        name_lower = (name or "").lower()
-        topics_lower = [topic.lower() for topic in (topics or [])]
-        desc_lower = (description or "").lower()
-        
-        text_to_check = f"{name_lower} {' '.join(topics_lower)} {desc_lower}"
-        
-        # Simple keyword-based classification
-        if any(keyword in text_to_check for keyword in ['ai', 'llm', 'gpt', 'agent', 'langchain']):
-            return 'AI'
-        elif any(keyword in text_to_check for keyword in ['ml', 'tensorflow', 'pytorch', 'sklearn']):
-            return 'ML'
-        elif any(keyword in text_to_check for keyword in ['data', 'etl', 'pipeline', 'airflow']):
-            return 'DataEngineering'
-        elif any(keyword in text_to_check for keyword in ['database', 'sql', 'mongodb', 'redis']):
-            return 'Database'
-        elif any(keyword in text_to_check for keyword in ['web', 'react', 'vue', 'api', 'frontend']):
-            return 'WebDev'
-        elif any(keyword in text_to_check for keyword in ['devops', 'docker', 'kubernetes', 'ci']):
-            return 'DevOps'
-        else:
-            return 'Other'
-    
-    simple_classify_udf = F.udf(simple_classify, StringType())
-    
-    return (repositories_df
-            .withColumn("technology_category", simple_classify_udf(F.col("name"), F.col("topics"), F.col("description")))
-            .withColumn("technology_subcategory", F.lit("general"))
-            .withColumn("classification_confidence", F.lit(0.5)))
+
 
 extract_lang_dist_udf = F.udf(
     extract_language_distribution, MapType(StringType(), DoubleType())

@@ -7,7 +7,7 @@ name = "stacktrend"
 dynamic = ["version"]
 description = "Technology Adoption Observatory - Track tech trends across GitHub, Stack Overflow, and package managers"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Sanchit Vijay", email = "sanchitvj1026@gmail.com" }, ]
 
