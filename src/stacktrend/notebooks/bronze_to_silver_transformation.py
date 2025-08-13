@@ -27,10 +27,43 @@ Usage in Fabric:
 # MAGIC 6. **Silver Storage**: Write to Silver lakehouse with Delta format
 
 # COMMAND ----------
+# MAGIC %%configure -f
+# MAGIC {
+# MAGIC     "defaultLakehouse": {
+# MAGIC         "name": "stacktrend_silver_lh"
+# MAGIC     }
+# MAGIC }
+
+# COMMAND ----------
+# Mount additional lakehouses for cross-lakehouse access using secure context
+try:
+    from notebookutils import mssparkutils
+    
+    # Get current workspace context securely
+    workspace_id = mssparkutils.env.getWorkspaceId()
+    
+    # Mount Bronze lakehouse using lakehouse name (Fabric resolves the ID securely)
+    bronze_mount = "/mnt/bronze"
+    bronze_abfs = f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/stacktrend_bronze_lh.Lakehouse"
+    
+    # Check if already mounted
+    existing_mounts = [mount.mountPoint for mount in mssparkutils.fs.mounts()]
+    if bronze_mount not in existing_mounts:
+        mssparkutils.fs.mount(bronze_abfs, bronze_mount)
+        print(f"✅ Mounted Bronze lakehouse at {bronze_mount}")
+    else:
+        print(f"✅ Bronze lakehouse already mounted at {bronze_mount}")
+        
+except Exception as e:
+    print(f"⚠️ Mount failed, will use cross-lakehouse table references: {e}")
+
+# COMMAND ----------
 # Import required libraries
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
-from pyspark.sql.types import StringType
+from pyspark.sql.types import StringType, DoubleType, MapType
+import sys
+import subprocess
 from datetime import datetime
 
 
@@ -41,29 +74,63 @@ spark = SparkSession.builder.appName("Bronze_to_Silver_Transformation").getOrCre
 # MAGIC ## Configuration and Setup
 
 # COMMAND ----------
-# Configuration - Use attached lakehouses
+# Configuration - Use explicit lakehouse references (independent of attachments)
 
 # Processing parameters
 PROCESSING_DATE = datetime.now().strftime("%Y-%m-%d")
 LOOKBACK_DAYS = 30  # For velocity calculations
-
-print(f"Processing date: {PROCESSING_DATE}")
 
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## LLM-Based Technology Classification
 
 # COMMAND ----------
-# Import LLM classifier and settings
-try:
-    from src.stacktrend.utils.llm_classifier import LLMRepositoryClassifier, create_repository_data_from_dict
-    from src.stacktrend.config.settings import settings
-    print("Successfully imported LLM classifier")
-except ImportError as e:
-    print(f"Import error (expected in Fabric): {e}")
-    # Fallback for Fabric environment - will implement simple classification
-    LLMRepositoryClassifier = None
-    settings = None
+def ensure_stacktrend_imports():
+    """Install and import stacktrend package strictly inside a function to satisfy linters."""
+    import os
+    try:
+        # Try different installation approaches
+        github_read_token = os.environ.get("GITHUB_READ_TOKEN")
+        repo_ref = os.environ.get("STACKTREND_GIT_REF", "dev")
+        
+        install_attempts = []
+        
+        # Attempt 1: Direct branch reference (most reliable)
+        if github_read_token:
+            install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@{repo_ref}")
+        install_attempts.append(f"git+https://github.com/sanchitvj/stacktrend.git@{repo_ref}")
+        
+        # Attempt 2: Main branch fallback
+        if github_read_token:
+            install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@main")
+        install_attempts.append("git+https://github.com/sanchitvj/stacktrend.git@main")
+        
+        for i, install_url in enumerate(install_attempts):
+            try:
+                print(f"Attempt {i+1}: Installing from {install_url}")
+                subprocess.check_call([
+                    sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", install_url
+                ], timeout=300)  # 5 minute timeout
+                print("✅ Successfully installed stacktrend package")
+                break
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                print(f"❌ Attempt {i+1} failed: {e}")
+                if i == len(install_attempts) - 1:
+                    raise Exception("All installation attempts failed")
+                continue
+
+        from stacktrend.utils.llm_classifier import (
+            LLMRepositoryClassifier as _LLMRepositoryClassifier,
+            create_repository_data_from_dict as _create_repository_data_from_dict,
+        )
+        from stacktrend.config.settings import settings as _settings
+
+        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+    
+    except Exception as e:
+        print(f"❌ CRITICAL: Failed to install stacktrend package: {e}")
+        print("LLM classification is REQUIRED and cannot proceed without the package")
+        raise Exception(f"LLM classification setup failed: {e}")
 
 def extract_language_distribution(language, topics, name):
     """Extract programming languages used and their estimated distribution."""
@@ -113,9 +180,7 @@ def classify_repositories_with_llm(repositories_df):
     """
     Use LLM to classify repositories into smart categories
     """
-    if not LLMRepositoryClassifier or not settings:
-        print("LLM classifier not available, using fallback classification")
-        return add_fallback_classification(repositories_df)
+    LLMRepositoryClassifier, create_repository_data_from_dict, settings = ensure_stacktrend_imports()
     
     try:
         # Convert Spark DataFrame to list of repository data
@@ -183,7 +248,7 @@ def classify_repositories_with_llm(repositories_df):
         
         add_classification_udf = F.udf(add_classification, StringType())
         add_subcategory_udf = F.udf(add_subcategory, StringType())
-        add_confidence_udf = F.udf(add_confidence, F.DoubleType())
+        add_confidence_udf = F.udf(add_confidence, DoubleType())
         
         return (repositories_df
                 .withColumn("technology_category", add_classification_udf(F.col("repository_id")))
@@ -191,53 +256,31 @@ def classify_repositories_with_llm(repositories_df):
                 .withColumn("classification_confidence", add_confidence_udf(F.col("repository_id"))))
         
     except Exception as e:
-        print(f"LLM classification failed: {e}")
-        print("Falling back to simple classification")
-        return add_fallback_classification(repositories_df)
+        print(f"Error classifying repositories with LLM: {e}")
+        raise
 
-def add_fallback_classification(repositories_df):
-    """Simple fallback classification when LLM is not available"""
-    def simple_classify(name, topics, description):
-        name_lower = (name or "").lower()
-        topics_lower = [topic.lower() for topic in (topics or [])]
-        desc_lower = (description or "").lower()
-        
-        text_to_check = f"{name_lower} {' '.join(topics_lower)} {desc_lower}"
-        
-        # Simple keyword-based classification
-        if any(keyword in text_to_check for keyword in ['ai', 'llm', 'gpt', 'agent', 'langchain']):
-            return 'AI'
-        elif any(keyword in text_to_check for keyword in ['ml', 'tensorflow', 'pytorch', 'sklearn']):
-            return 'ML'
-        elif any(keyword in text_to_check for keyword in ['data', 'etl', 'pipeline', 'airflow']):
-            return 'DataEngineering'
-        elif any(keyword in text_to_check for keyword in ['database', 'sql', 'mongodb', 'redis']):
-            return 'Database'
-        elif any(keyword in text_to_check for keyword in ['web', 'react', 'vue', 'api', 'frontend']):
-            return 'WebDev'
-        elif any(keyword in text_to_check for keyword in ['devops', 'docker', 'kubernetes', 'ci']):
-            return 'DevOps'
-        else:
-            return 'Other'
-    
-    simple_classify_udf = F.udf(simple_classify, StringType())
-    
-    return (repositories_df
-            .withColumn("technology_category", simple_classify_udf(F.col("name"), F.col("topics"), F.col("description")))
-            .withColumn("technology_subcategory", F.lit("general"))
-            .withColumn("classification_confidence", F.lit(0.5)))
 
-extract_lang_dist_udf = F.udf(extract_language_distribution, F.MapType(StringType(), F.DoubleType()))
+
+extract_lang_dist_udf = F.udf(
+    extract_language_distribution, MapType(StringType(), DoubleType())
+)
 
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Data Loading and Initial Processing
 
 # COMMAND ----------
-# Read Bronze data - from table
+# Read Bronze data using mounted lakehouse or cross-lakehouse reference
 try:
-    # Read from the github_repositories table (with lakehouse prefix)
-    bronze_df = spark.table("stacktrend_bronze_lh.github_repositories")
+    # Try mounted path first
+    try:
+        bronze_df = spark.read.format("delta").load("/mnt/bronze/Tables/github_repositories")
+        print("✅ Successfully loaded from mounted Bronze lakehouse")
+    except Exception as e:
+        print(f"Error loading from mounted Bronze lakehouse: {e}")
+        # Fallback to cross-lakehouse table reference
+        bronze_df = spark.table("stacktrend_bronze_lh.github_repositories")
+        print("✅ Successfully loaded using cross-lakehouse reference")
     
     # Check if we have any data at all
     total_records = bronze_df.count()
@@ -476,7 +519,7 @@ final_silver_df = silver_validated_df.select(
     "partition_date"
 )
 
-# Write to Silver lakehouse using Delta format
+# Write to Silver lakehouse (using default lakehouse configuration)
 try:
     (final_silver_df
      .write
@@ -486,10 +529,10 @@ try:
      .partitionBy("partition_date", "technology_category")
      .saveAsTable("silver_repositories"))
     
-    print(f"Successfully wrote {clean_records} records to Silver layer")
+    print(f"✅ Successfully wrote {clean_records} records to Silver layer")
     
 except Exception as e:
-    print(f"Error writing to Silver layer: {e}")
+    print(f"❌ Error saving to Silver lakehouse: {e}")
     raise
 
 # COMMAND ----------

@@ -18,6 +18,14 @@ Usage in Fabric Data Factory:
 # MAGIC This notebook ingests GitHub API response data and saves it to the Bronze lakehouse in Delta format.
 
 # COMMAND ----------
+# MAGIC %%configure -f
+# MAGIC {
+# MAGIC     "defaultLakehouse": {
+# MAGIC         "name": "stacktrend_bronze_lh"
+# MAGIC     }
+# MAGIC }
+
+# COMMAND ----------
 # Import required libraries
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
@@ -34,8 +42,9 @@ import requests
 spark = SparkSession.builder.appName("GitHub_Data_Ingestion").getOrCreate()
 
 # COMMAND ----------
-# Configuration - Use lakehouse shorthand if attached
+# Configuration
 PROCESSING_DATE = datetime.now().strftime("%Y-%m-%d")
+
 
 # COMMAND ----------
 # MAGIC %md
@@ -270,14 +279,13 @@ except Exception as e:
 # MAGIC ## Save to Bronze Lakehouse
 
 # COMMAND ----------
-# Write to Bronze lakehouse in Delta format
+# Write to Bronze lakehouse (using default lakehouse configuration)
 try:
-    # First, try to create the table directly
     bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repositories")
-    print(f"Saved {record_count} records to Bronze lakehouse")
+    print(f"✅ Saved {record_count} records to Bronze lakehouse")
     
 except Exception as e:
-    print(f"Error saving to Bronze lakehouse: {e}")
+    print(f"❌ Error saving to Bronze lakehouse: {e}")
     raise
 
 # COMMAND ----------

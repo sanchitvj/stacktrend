@@ -90,8 +90,49 @@ class FabricNotebookDeployer:
         
         return None
     
-    def convert_py_to_notebook_format(self, py_content: str) -> str:
-        """Convert Python file to notebook format"""
+    def get_notebook_metadata(self, notebook_id: str) -> dict:
+        """Get existing notebook metadata to preserve lakehouse attachments"""
+        try:
+            url = f"{self.base_url}/workspaces/{self.workspace_id}/notebooks/{notebook_id}/getDefinition"
+            
+            # Try multiple times for async operations
+            for attempt in range(3):
+                response = requests.post(url, headers=self.get_headers())
+                print(f"Retrieving metadata for notebook {notebook_id}, attempt {attempt + 1}, status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    definition = response.json()
+                    print(f"Definition keys: {definition.keys()}")
+                    
+                    if "definition" in definition and "parts" in definition["definition"]:
+                        for part in definition["definition"]["parts"]:
+                            if part.get("path") == "notebook-content.ipynb":
+                                content = base64.b64decode(part["payload"]).decode('utf-8')
+                                notebook_json = json.loads(content)
+                                metadata = notebook_json.get("metadata", {})
+                                print(f"Retrieved metadata keys: {metadata.keys()}")
+                                
+                                # Preserve all metadata except language_info which we'll override
+                                preserved_metadata = {k: v for k, v in metadata.items() if k != "language_info"}
+                                print(f"Preserving metadata: {preserved_metadata}")
+                                return preserved_metadata
+                
+                elif response.status_code == 202:
+                    print("Async operation in progress, waiting 2 seconds...")
+                    time.sleep(2)
+                    continue
+                else:
+                    print(f"Failed to retrieve metadata: {response.status_code} - {response.text}")
+                    break
+                            
+            print("No metadata found or failed to retrieve after retries")
+            return {}
+        except Exception as e:
+            print(f"Error retrieving existing metadata: {e}")
+            return {}
+
+    def convert_py_to_notebook_format(self, py_content: str, existing_metadata: dict = None) -> str:
+        """Convert Python file to notebook format, preserving existing metadata"""
         # Split content by COMMAND ---------- markers
         cells = []
         current_cell = []
@@ -117,10 +158,28 @@ class FabricNotebookDeployer:
         if current_cell:
             cells.append('\n'.join(current_cell))
         
-        # Create notebook structure
+        # Create notebook structure with preserved metadata
+        base_metadata = {
+            "language_info": {
+                "name": "python"
+            }
+        }
+        
+        # Merge with existing metadata to preserve lakehouse attachments
+        if existing_metadata:
+            # Preserve all existing metadata
+            base_metadata.update(existing_metadata)
+            print(f"Merged metadata keys: {base_metadata.keys()}")
+            
+        # Always set language_info correctly (override if exists)
+        base_metadata["language_info"] = {
+            "name": "python"
+        }
+        
         notebook = {
             "nbformat": 4,
             "nbformat_minor": 2,
+            "metadata": base_metadata,
             "cells": []
         }
         
@@ -148,12 +207,35 @@ class FabricNotebookDeployer:
         
         return json.dumps(notebook, indent=2)
     
+    def get_notebook_lakehouses(self, notebook_id: str) -> list:
+        """Get lakehouse attachments for a notebook"""
+        try:
+            # List all items in the workspace to find lakehouse attachments
+            url = f"{self.base_url}/workspaces/{self.workspace_id}/items"
+            response = requests.get(url, headers=self.get_headers())
+            
+            if response.status_code == 200:
+                items = response.json().get("value", [])
+                lakehouses = [item for item in items if item.get("type") == "Lakehouse"]
+                print(f"Found {len(lakehouses)} lakehouses in workspace")
+                return lakehouses
+            else:
+                print(f"Failed to get workspace items: {response.status_code}")
+                return []
+        except Exception as e:
+            print(f"Error getting notebook lakehouses: {e}")
+            return []
+
     def update_notebook(self, notebook_id: str, content: str) -> bool:
-        """Update existing notebook content"""
+        """Update existing notebook content while preserving lakehouse attachments"""
+        
         url = f"{self.base_url}/workspaces/{self.workspace_id}/notebooks/{notebook_id}/updateDefinition"
         
+        # Get existing notebook to preserve lakehouse attachments
+        existing_metadata = self.get_notebook_metadata(notebook_id)
+        
         # Convert content to base64
-        notebook_content = self.convert_py_to_notebook_format(content)
+        notebook_content = self.convert_py_to_notebook_format(content, existing_metadata)
         content_b64 = base64.b64encode(notebook_content.encode('utf-8')).decode('utf-8')
         
         payload = {
@@ -211,25 +293,73 @@ class FabricNotebookDeployer:
             print(f"Failed to create notebook '{name}': {response.status_code} - {response.text}")
             return None
     
+    def has_notebook_changed(self, file_path: str, notebook_id: str) -> bool:
+        """Check if local file content differs from deployed notebook"""
+        try:
+            # Get current notebook content
+            url = f"{self.base_url}/workspaces/{self.workspace_id}/notebooks/{notebook_id}/getDefinition"
+            response = requests.post(url, headers=self.get_headers())
+            
+            if response.status_code != 200:
+                print("Could not retrieve notebook content for comparison, assuming changed")
+                return True
+                
+            definition = response.json()
+            if "definition" in definition and "parts" in definition["definition"]:
+                for part in definition["definition"]["parts"]:
+                    if part.get("path") == "notebook-content.ipynb":
+                        deployed_content = base64.b64decode(part["payload"]).decode('utf-8')
+                        deployed_notebook = json.loads(deployed_content)
+                        
+                        # Read local file
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            local_content = f.read()
+                        
+                        # Convert local to notebook format (without metadata to compare just code)
+                        local_notebook_json = self.convert_py_to_notebook_format(local_content, None)
+                        local_notebook = json.loads(local_notebook_json)
+                        
+                        # Compare only cells (ignore metadata for change detection)
+                        deployed_cells = deployed_notebook.get("cells", [])
+                        local_cells = local_notebook.get("cells", [])
+                        
+                        return deployed_cells != local_cells
+            
+            return True  # If we can't compare, assume changed
+        except Exception as e:
+            print(f"Error comparing notebook content: {e}")
+            return True  # If error, assume changed
+
     def deploy_notebook(self, file_path: str, notebook_name: str) -> bool:
-        """Deploy a single notebook"""
+        """Deploy a single notebook only if it has changed"""
         if not os.path.exists(file_path):
             print(f"File not found: {file_path}")
             return False
-        
-        print(f"Processing {file_path} -> {notebook_name}")
-        
-        # Read file content
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
         
         # Check if notebook exists
         notebook_id = self.find_notebook_by_name(notebook_name)
         
         if notebook_id:
+            # Check if content has actually changed
+            if not self.has_notebook_changed(file_path, notebook_id):
+                print(f"⏭️  Skipping {notebook_name} - no changes detected")
+                return True
+            
+            print(f"🔄 Updating {file_path} -> {notebook_name} (changes detected)")
+            
+            # Read file content
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
             # Update existing notebook
             return self.update_notebook(notebook_id, content)
         else:
+            print(f"🆕 Creating {file_path} -> {notebook_name}")
+            
+            # Read file content
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
             # Create new notebook
             new_id = self.create_notebook(notebook_name, content)
             return new_id is not None
