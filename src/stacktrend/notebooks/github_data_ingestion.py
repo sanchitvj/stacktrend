@@ -107,69 +107,60 @@ else:
         current_year = datetime.now().year
         last_year = current_year - 1
         
-        # Smart search queries based on 2024 AI/ML and Data Engineering trends
+        # Comprehensive search queries - ALL repos must have >1000 stars
         search_queries = [
-            # Agentic AI & AI Agents
-            "agentic-ai+ai-agents+autonomous+stars:>20+pushed:>2023-01-01",
-            "langchain+autogen+crewai+multi-agent+stars:>50",
-            "ai-assistant+chatbot+conversational-ai+stars:>30",
-            "semantic-kernel+ai-orchestration+stars:>20",
+            # High-impact AI & ML (>1000 stars)
+            "artificial-intelligence+machine-learning+stars:>1000+pushed:>2023-01-01",
+            "deep-learning+neural-networks+pytorch+tensorflow+stars:>1000",
+            "large-language-model+LLM+GPT+transformer+stars:>1000",
+            "computer-vision+opencv+image-processing+stars:>1000",
+            "natural-language-processing+NLP+huggingface+stars:>1000",
             
-            # Generative AI & LLMs
-            "generative-ai+large-language-model+LLM+stars:>50",
-            "ollama+local-llm+open-source-llm+stars:>30",
-            "huggingface+transformers+fine-tuning+stars:>100",
-            "prompt-engineering+prompt-optimization+stars:>20",
+            # Generative AI & Agent Systems (>1000 stars)
+            "generative-ai+openai+chatgpt+stable-diffusion+stars:>1000",
+            "langchain+llamaindex+ai-agent+autonomous+stars:>1000", 
+            "retrieval-augmented-generation+RAG+vector-database+stars:>1000",
+            "prompt-engineering+fine-tuning+model-training+stars:>1000",
             
-            # Retrieval & Knowledge Systems
-            "retrieval-augmented-generation+RAG+vector-database+stars:>30",
-            "embeddings+semantic-search+similarity+stars:>20",
-            "llamaindex+vector-store+knowledge-base+stars:>50",
-            "pinecone+chroma+weaviate+qdrant+stars:>20",
+            # Data Engineering & Analytics (>1000 stars)
+            "data-engineering+ETL+data-pipeline+apache-spark+stars:>1000",
+            "apache-airflow+workflow+orchestration+data-processing+stars:>1000",
+            "dbt+analytics-engineering+data-transformation+stars:>1000",
+            "real-time+streaming+apache-kafka+event-driven+stars:>1000",
+            "big-data+distributed-computing+hadoop+elasticsearch+stars:>1000",
             
-            # Computer Vision & Multimodal AI
-            "computer-vision+object-detection+image-processing+stars:>30",
-            "multimodal-ai+vision-language+CLIP+stars:>20",
-            "stable-diffusion+image-generation+diffusion+stars:>50",
-            "opencv+yolo+detectron+stars:>30",
+            # Databases & Infrastructure (>1000 stars)
+            "database+SQL+NoSQL+postgresql+mongodb+stars:>1000",
+            "vector-database+embeddings+similarity-search+stars:>1000",
+            "redis+caching+in-memory+key-value+stars:>1000",
+            "time-series+metrics+monitoring+prometheus+stars:>1000",
             
-            # Machine Learning & Deep Learning
-            "pytorch+tensorflow+jax+deep-learning+stars:>100",
-            "scikit-learn+xgboost+lightgbm+machine-learning+stars:>50",
-            "reinforcement-learning+RL+gym+stable-baselines+stars:>20",
-            "federated-learning+distributed-ml+stars:>10",
+            # Web Development & Frameworks (>1000 stars)
+            "web-development+framework+react+vue+angular+stars:>1000",
+            "backend+API+microservices+node+python+stars:>1000",
+            "frontend+javascript+typescript+css+stars:>1000",
+            "fullstack+web-application+mobile-app+stars:>1000",
             
-            # Data Engineering & MLOps
-            "data-engineering+ETL+data-pipeline+stars:>30",
-            "apache-airflow+prefect+dagster+workflow+stars:>50",
-            "dbt+data-transformation+analytics-engineering+stars:>100",
-            "mlops+model-deployment+mlflow+kubeflow+stars:>30",
+            # DevOps & Cloud Native (>1000 stars)
+            "devops+kubernetes+docker+containerization+stars:>1000",
+            "ci-cd+github-actions+automation+deployment+stars:>1000",
+            "infrastructure+terraform+cloud+AWS+azure+stars:>1000",
+            "monitoring+observability+logging+grafana+stars:>1000",
+            "security+cybersecurity+authentication+encryption+stars:>1000",
             
-            # Real-time & Streaming
-            "apache-kafka+stream-processing+real-time+stars:>50",
-            "apache-spark+big-data+distributed-computing+stars:>100",
-            "flink+storm+streaming+event-driven+stars:>20",
-            "redis+message-queue+pub-sub+stars:>30",
-            
-            # Data Infrastructure & Observability
-            "data-observability+data-quality+monitoring+stars:>20",
-            "airbyte+fivetran+data-integration+ELT+stars:>30",
-            "snowflake+databricks+data-warehouse+lakehouse+stars:>20",
-            "prometheus+grafana+observability+monitoring+stars:>50",
-            
-            # Cloud-Native & DevOps
-            "kubernetes+cloud-native+microservices+stars:>100",
-            "terraform+infrastructure-as-code+IaC+stars:>50",
-            "docker+containerization+orchestration+stars:>100",
-            "github-actions+ci-cd+automation+stars:>30"
+            # Programming Languages & Tools (>1000 stars)
+            "python+golang+rust+java+cpp+stars:>1000",
+            "javascript+typescript+node+deno+stars:>1000", 
+            "developer-tools+CLI+productivity+automation+stars:>1000",
+            "open-source+library+framework+SDK+stars:>1000"
         ]
         
         all_repositories = []
         successful_queries = 0
         
         # Get multiple pages for each query to maximize data
-        for i, query in enumerate(search_queries[:6]):  # Limit to avoid rate limits
-            for page in range(1, 4):  # Get 3 pages per query
+        for i, query in enumerate(search_queries[:12]):  # Use more queries for >1000 star repos
+            for page in range(1, 6):  # Get 5 pages per query (500 repos per query)
                 try:
                     url = f"https://api.github.com/search/repositories?q={query}&sort=updated&order=desc&per_page=100&page={page}"
                     response = requests.get(url)
@@ -187,11 +178,25 @@ else:
                     print(f"Query {i+1} Page {page} error: {e}")
                     continue
         
+        # Deduplicate repositories by ID and filter for >1000 stars
+        seen_repos = set()
+        filtered_repositories = []
+        
+        for repo in all_repositories:
+            repo_id = repo.get('id')
+            stars = repo.get('stargazers_count', 0)
+            
+            # Only include repos with >1000 stars and not already seen
+            if repo_id not in seen_repos and stars > 1000:
+                seen_repos.add(repo_id)
+                filtered_repositories.append(repo)
+        
         # Combine all data
-        combined_data = {"items": all_repositories}
+        combined_data = {"items": filtered_repositories}
         github_response = json.dumps(combined_data)
         
-        print(f"Retrieved {len(all_repositories)} repositories from {successful_queries} queries")
+        print(f"Retrieved {len(all_repositories)} total repositories from {successful_queries} queries")
+        print(f"After deduplication and >1000 star filter: {len(filtered_repositories)} repositories")
         
     except Exception as e:
         raise Exception(f"Could not get GitHub data: {e}")
