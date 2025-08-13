@@ -58,15 +58,35 @@ LOOKBACK_DAYS = 30  # For velocity calculations
 def ensure_stacktrend_imports():
     """Install and import stacktrend package strictly inside a function to satisfy linters."""
     try:
+        # Try different installation approaches
         github_read_token = os.environ.get("GITHUB_READ_TOKEN")
         repo_ref = os.environ.get("STACKTREND_GIT_REF", "dev")
-        if github_read_token:
-            install_url = f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@{repo_ref}"
-        else:
-            install_url = f"git+https://github.com/sanchitvj/stacktrend.git@{repo_ref}"
         
-        print(f"Installing stacktrend package from: {install_url}")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", install_url])
+        install_attempts = []
+        
+        # Attempt 1: Direct branch reference (most reliable)
+        if github_read_token:
+            install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@{repo_ref}")
+        install_attempts.append(f"git+https://github.com/sanchitvj/stacktrend.git@{repo_ref}")
+        
+        # Attempt 2: Main branch fallback
+        if github_read_token:
+            install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@main")
+        install_attempts.append("git+https://github.com/sanchitvj/stacktrend.git@main")
+        
+        for i, install_url in enumerate(install_attempts):
+            try:
+                print(f"Attempt {i+1}: Installing from {install_url}")
+                subprocess.check_call([
+                    sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", install_url
+                ], timeout=300)  # 5 minute timeout
+                print("✅ Successfully installed stacktrend package")
+                break
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                print(f"❌ Attempt {i+1} failed: {e}")
+                if i == len(install_attempts) - 1:
+                    raise Exception("All installation attempts failed")
+                continue
 
         from stacktrend.utils.llm_classifier import (
             LLMRepositoryClassifier as _LLMRepositoryClassifier,
@@ -77,9 +97,9 @@ def ensure_stacktrend_imports():
         return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
     
     except Exception as e:
-        print(f"Failed to install stacktrend package: {e}")
-        print("This might be due to network restrictions or Python version compatibility")
-        raise
+        print(f"❌ CRITICAL: Failed to install stacktrend package: {e}")
+        print("LLM classification is REQUIRED and cannot proceed without the package")
+        raise Exception(f"LLM classification setup failed: {e}")
 
 def extract_language_distribution(language, topics, name):
     """Extract programming languages used and their estimated distribution."""
