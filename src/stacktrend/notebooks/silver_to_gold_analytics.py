@@ -45,13 +45,18 @@ spark = SparkSession.builder.appName("Silver_to_Gold_Analytics").getOrCreate()
 PROCESSING_DATE = datetime.now().strftime("%Y-%m-%d")
 ANALYSIS_WINDOW_DAYS = 30
 
-# Lakehouse configuration (explicit references to avoid attachment dependency)
+# Lakehouse configuration (absolute paths - no attachment required)
 SILVER_LAKEHOUSE = "stacktrend_silver_lh"
 GOLD_LAKEHOUSE = "stacktrend_gold_lh"
+WORKSPACE_ID = "060223d7-8152-4dec-97d3-ef2d5d8c6644"  # Your workspace ID from logs
+
+# OneLake absolute paths
+SILVER_PATH = f"abfss://{WORKSPACE_ID}@onelake.dfs.fabric.microsoft.com/{SILVER_LAKEHOUSE}.Lakehouse/Tables"
+GOLD_PATH = f"abfss://{WORKSPACE_ID}@onelake.dfs.fabric.microsoft.com/{GOLD_LAKEHOUSE}.Lakehouse/Tables"
 
 print(f"Processing date: {PROCESSING_DATE}")
-print(f"Silver lakehouse: {SILVER_LAKEHOUSE}")
-print(f"Gold lakehouse: {GOLD_LAKEHOUSE}")
+print(f"Silver path: {SILVER_PATH}")
+print(f"Gold path: {GOLD_PATH}")
 
 # COMMAND ----------
 # MAGIC %md
@@ -60,8 +65,8 @@ print(f"Gold lakehouse: {GOLD_LAKEHOUSE}")
 # COMMAND ----------
 # Read Silver layer data from table
 try:
-    # Read from the silver_repositories table (with explicit lakehouse reference)
-    silver_df = spark.table(f"{SILVER_LAKEHOUSE}.silver_repositories")
+    # Read from the silver_repositories table (using absolute path)
+    silver_df = spark.read.format("delta").load(f"{SILVER_PATH}/silver_repositories")
     
     # Check if we have any data at all
     total_records = silver_df.count()
@@ -292,7 +297,7 @@ try:
      .mode("overwrite")
      .option("overwriteSchema", "true")
      .partitionBy("partition_date")
-     .saveAsTable(f"{GOLD_LAKEHOUSE}.gold_technology_metrics"))
+     .save(f"{GOLD_PATH}/gold_technology_metrics"))
     
     gold_record_count = final_gold_df.count()
     print(f"Successfully wrote {gold_record_count} records to Gold layer")
