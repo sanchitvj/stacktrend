@@ -312,43 +312,94 @@ extract_lang_dist_udf = F.udf(
 # COMMAND ----------
 # Read Bronze data using mounted lakehouse or cross-lakehouse reference
 try:
-    # Try mounted path first
+    bronze_df = None
+    
+    # First, check what tables are available
+    print("Checking available tables in Bronze lakehouse...")
     try:
-        bronze_df = spark.read.format("delta").load("/mnt/bronze/Tables/github_repositories")
-        print("✅ Successfully loaded from mounted Bronze lakehouse")
-    except Exception as e:
-        print(f"Error loading from mounted Bronze lakehouse: {e}")
-        # Fallback to cross-lakehouse table reference
-        bronze_df = spark.table("stacktrend_bronze_lh.github_repositories")
-        print("✅ Successfully loaded using cross-lakehouse reference")
+        available_tables = spark.sql("SHOW TABLES IN stacktrend_bronze_lh").collect()
+        print(f"Available tables: {[row.tableName for row in available_tables]}")
+    except Exception as table_check_error:
+        print(f"Could not list tables: {table_check_error}")
+    
+    # Try multiple approaches to load data
+    load_attempts = [
+        ("mounted path", lambda: spark.read.format("delta").load("/mnt/bronze/Tables/github_repositories")),
+        ("cross-lakehouse table", lambda: spark.table("stacktrend_bronze_lh.github_repositories")),
+        ("simple table name", lambda: spark.table("github_repositories")),
+        ("direct SQL query", lambda: spark.sql("SELECT * FROM stacktrend_bronze_lh.github_repositories"))
+    ]
+    
+    for attempt_name, load_func in load_attempts:
+        try:
+            print(f"Attempting to load using {attempt_name}...")
+            bronze_df = load_func()
+            print(f"✅ Successfully loaded from {attempt_name}")
+            break
+        except Exception as e:
+            print(f"❌ Failed to load using {attempt_name}: {e}")
+            continue
+    
+    if bronze_df is None:
+        raise Exception("❌ All data loading attempts failed. Bronze lakehouse may be empty or inaccessible.")
     
     # Check if we have any data at all
-    total_records = bronze_df.count()
-    print(f"Total records in Bronze layer: {total_records}")
+    try:
+        total_records = bronze_df.count()
+        print(f"Total records in Bronze layer: {total_records}")
+        
+        if total_records == 0:
+            print("⚠️ Bronze layer contains 0 records")
+            # Check the schema to see if table exists but is empty
+            print("Bronze table schema:")
+            bronze_df.printSchema()
+            raise Exception("No data available in Bronze layer - table exists but is empty")
+            
+    except Exception as count_error:
+        print(f"❌ Error counting records: {count_error}")
+        # Try to show schema and first few rows for debugging
+        try:
+            print("Attempting to show Bronze table schema:")
+            bronze_df.printSchema()
+            print("Attempting to show first 5 rows:")
+            bronze_df.show(5, truncate=False)
+        except Exception as debug_error:
+            print(f"❌ Could not debug Bronze table: {debug_error}")
+        raise Exception(f"Error accessing Bronze data: {count_error}")
     
     if total_records > 0:
         # Try to get the latest partition date
-        available_dates = (bronze_df
-                          .select("partition_date")
-                          .distinct()
-                          .orderBy(F.desc("partition_date"))
-                          .collect())
-        
-        if available_dates:
-            latest_date = available_dates[0]["partition_date"]
-            bronze_df = bronze_df.where(F.col("partition_date") == latest_date)
-            record_count = bronze_df.count()
-            print(f"Using data from date: {latest_date} ({record_count} records)")
-        else:
-            # No partition dates found, use all data
+        try:
+            available_dates = (bronze_df
+                              .select("partition_date")
+                              .distinct()
+                              .orderBy(F.desc("partition_date"))
+                              .collect())
+            
+            if available_dates:
+                latest_date = available_dates[0]["partition_date"]
+                bronze_df = bronze_df.where(F.col("partition_date") == latest_date)
+                record_count = bronze_df.count()
+                print(f"Using data from date: {latest_date} ({record_count} records)")
+            else:
+                # No partition dates found, use all data
+                record_count = total_records
+                print(f"No partition dates found, using all {record_count} records")
+                
+        except Exception as partition_error:
+            print(f"⚠️ Error filtering by partition date: {partition_error}")
+            print("Using all available data without date filtering")
             record_count = total_records
-            print(f"No partition dates found, using all {record_count} records")
     else:
         raise Exception("No data available in Bronze layer")
             
 except Exception as e:
-    print(f"Error loading Bronze data: {e}")
-    raise
+    print(f"❌ CRITICAL: Error loading Bronze data: {e}")
+    print("\n🔍 Debugging information:")
+    print("1. Check if GitHub Data Ingestion notebook ran successfully")
+    print("2. Verify Bronze lakehouse contains github_repositories table")
+    print("3. Check Data Factory pipeline logs for previous steps")
+    raise Exception(f"Bronze data loading failed: {e}")
 
 # COMMAND ----------
 # MAGIC %md

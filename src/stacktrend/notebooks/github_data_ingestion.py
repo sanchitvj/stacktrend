@@ -55,37 +55,54 @@ PROCESSING_DATE = datetime.now().strftime("%Y-%m-%d")
 
 # COMMAND ----------
 # Get the GitHub API response from pipeline parameter
-try:
-    from notebookutils import mssparkutils
-    params = mssparkutils.notebook.getParameters()
-    if 'github_api_response' in params:
-        print("Found GitHub API parameter")
-except Exception as e:
-    print(f"Parameter check failed: {e}")
-
-# Try to get GitHub API data from pipeline parameters
+print("🔍 Checking for Data Factory pipeline parameters...")
 github_response = None
+
 try:
     from notebookutils import mssparkutils
+    
+    # Get all parameters for debugging
     params = mssparkutils.notebook.getParameters()
+    print(f"All available parameters: {list(params.keys())}")
     
     if 'github_api_response' in params:
         github_response = params['github_api_response']
-        print(f"Received GitHub API data: {len(str(github_response))} characters")
+        print("✅ Found 'github_api_response' parameter")
+        print(f"Parameter type: {type(github_response)}")
+        print(f"Parameter length: {len(str(github_response))} characters")
+        
+        # Check if it's empty or just whitespace
+        if not github_response or str(github_response).strip() == "":
+            print("⚠️ Parameter exists but is empty or whitespace")
+            github_response = None
+        elif str(github_response).strip() in ["null", "None", "{}", "[]"]:
+            print("⚠️ Parameter contains null/empty values")
+            github_response = None
+        else:
+            print(f"✅ Valid parameter received: {str(github_response)[:200]}...")
     else:
-        # Try Spark configuration as fallback
-        github_response = spark.conf.get('github_api_response')
-        if github_response:
-            print(f"Received GitHub API data via spark.conf: {len(str(github_response))} characters")
-            
+        print("❌ 'github_api_response' parameter not found")
+        
+        # Try alternative parameter names
+        alternative_names = ['github_response', 'api_response', 'web_activity_output']
+        for alt_name in alternative_names:
+            if alt_name in params:
+                print(f"Found alternative parameter: {alt_name}")
+                github_response = params[alt_name]
+                break
+                
 except Exception as e:
-    print(f"Parameter retrieval failed: {e}")
+    print(f"❌ Error accessing pipeline parameters: {e}")
 
-# Final check
+# Final parameter validation
 if github_response:
-    print(f"SUCCESS: Received GitHub API data ({len(str(github_response))} characters)")
+    print(f"✅ SUCCESS: Using pipeline parameter ({len(str(github_response))} characters)")
 else:
-    print("No parameter found, using direct GitHub API call")
+    print("❌ No valid pipeline parameter found - falling back to direct GitHub API call")
+    print("This usually means:")
+    print("1. Data Factory Web Activity failed")
+    print("2. Parameter name mismatch in Data Factory pipeline")
+    print("3. Parameter value is empty/null")
     try:
         current_year = datetime.now().year
         last_year = current_year - 1
@@ -282,11 +299,27 @@ except Exception as e:
 # COMMAND ----------
 # Write to Bronze lakehouse (using default lakehouse configuration)
 try:
-    bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repositories")
-    print(f"✅ Saved {record_count} records to Bronze lakehouse")
+    if record_count > 0:
+        bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repositories")
+        print(f"✅ Saved {record_count} records to Bronze lakehouse")
+    else:
+        print("⚠️ No data to save - creating empty table with proper schema")
+        # Save the empty DataFrame with schema to ensure table exists
+        bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repositories")
+        print("✅ Created empty Bronze table with proper schema")
+        
+        # Log the issue for debugging
+        print("🔍 Debugging: No repositories were ingested")
+        print("Possible causes:")
+        print("1. GitHub API parameter not passed from Data Factory")
+        print("2. GitHub API calls failed (rate limits, network issues)")
+        print("3. Empty API responses")
     
 except Exception as e:
     print(f"❌ Error saving to Bronze lakehouse: {e}")
+    print(f"Record count: {record_count}")
+    print("DataFrame schema:")
+    bronze_df.printSchema()
     raise
 
 # COMMAND ----------
