@@ -34,8 +34,14 @@ import requests
 spark = SparkSession.builder.appName("GitHub_Data_Ingestion").getOrCreate()
 
 # COMMAND ----------
-# Configuration - Use lakehouse shorthand if attached
+# Configuration - Use explicit lakehouse references (independent of attachments)
 PROCESSING_DATE = datetime.now().strftime("%Y-%m-%d")
+
+# Lakehouse configuration (explicit references to avoid attachment dependency)
+BRONZE_LAKEHOUSE = "stacktrend_bronze_lh"
+
+print(f"Processing date: {PROCESSING_DATE}")
+print(f"Bronze lakehouse: {BRONZE_LAKEHOUSE}")
 
 # COMMAND ----------
 # MAGIC %md
@@ -273,7 +279,7 @@ except Exception as e:
 # Write to Bronze lakehouse in Delta format
 try:
     # First, try to create the table directly
-    bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repositories")
+    bronze_df.write.format("delta").mode("overwrite").saveAsTable(f"{BRONZE_LAKEHOUSE}.github_repositories")
     print(f"Saved {record_count} records to Bronze lakehouse")
     
 except Exception as e:
