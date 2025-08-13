@@ -26,6 +26,37 @@ Usage in Fabric:
 # MAGIC 5. **Comparative Rankings**: Technology popularity and growth rankings
 
 # COMMAND ----------
+# MAGIC %%configure -f
+# MAGIC {
+# MAGIC     "defaultLakehouse": {
+# MAGIC         "name": "stacktrend_gold_lh"
+# MAGIC     }
+# MAGIC }
+
+# COMMAND ----------
+# Mount additional lakehouses for cross-lakehouse access using secure context
+try:
+    from notebookutils import mssparkutils
+    
+    # Get current workspace context securely
+    workspace_id = mssparkutils.env.getWorkspaceId()
+    
+    # Mount Silver lakehouse using lakehouse name (Fabric resolves the ID securely)
+    silver_mount = "/mnt/silver"
+    silver_abfs = f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/stacktrend_silver_lh.Lakehouse"
+    
+    # Check if already mounted
+    existing_mounts = [mount.mountPoint for mount in mssparkutils.fs.mounts()]
+    if silver_mount not in existing_mounts:
+        mssparkutils.fs.mount(silver_abfs, silver_mount)
+        print(f"✅ Mounted Silver lakehouse at {silver_mount}")
+    else:
+        print(f"✅ Silver lakehouse already mounted at {silver_mount}")
+        
+except Exception as e:
+    print(f"⚠️ Mount failed, will use cross-lakehouse table references: {e}")
+
+# COMMAND ----------
 # Import required libraries
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
@@ -54,7 +85,15 @@ ANALYSIS_WINDOW_DAYS = 30
 # Read Silver layer data from table
 try:
     # Read from the silver_repositories table (cross-lakehouse reference)
-    silver_df = spark.table("stacktrend_silver_lh.silver_repositories")
+    # Try mounted path first, fallback to cross-lakehouse reference
+    try:
+        silver_df = spark.read.format("delta").load("/mnt/silver/Tables/silver_repositories")
+        print("✅ Successfully loaded from mounted Silver lakehouse")
+    except Exception as e:
+        print(f"Error loading from mounted Silver lakehouse: {e}")
+        # Fallback to cross-lakehouse table reference
+        silver_df = spark.table("stacktrend_silver_lh.silver_repositories")
+        print("✅ Successfully loaded using cross-lakehouse reference")
     
     # Check if we have any data at all
     total_records = silver_df.count()
@@ -277,7 +316,7 @@ print(f"Prepared {final_gold_df.count():,} technology metrics for Gold layer")
 # MAGIC ## Write to Gold Layer
 
 # COMMAND ----------
-# Write to Gold lakehouse as table
+# Write to Gold lakehouse (using default lakehouse configuration)
 try:
     (final_gold_df
      .write
@@ -285,14 +324,13 @@ try:
      .mode("overwrite")
      .option("overwriteSchema", "true")
      .partitionBy("partition_date")
-     .option("path", "Tables/gold_technology_metrics")
-     .saveAsTable("stacktrend_gold_lh.gold_technology_metrics"))
+     .saveAsTable("gold_technology_metrics"))
     
     gold_record_count = final_gold_df.count()
-    print(f"Successfully wrote {gold_record_count} records to Gold layer")
+    print(f"✅ Successfully wrote {gold_record_count} records to Gold layer")
     
 except Exception as e:
-    print(f"Error writing to Gold layer: {e}")
+    print(f"❌ Error saving to Gold lakehouse: {e}")
     raise
 
 # COMMAND ----------

@@ -27,11 +27,41 @@ Usage in Fabric:
 # MAGIC 6. **Silver Storage**: Write to Silver lakehouse with Delta format
 
 # COMMAND ----------
+# MAGIC %%configure -f
+# MAGIC {
+# MAGIC     "defaultLakehouse": {
+# MAGIC         "name": "stacktrend_silver_lh"
+# MAGIC     }
+# MAGIC }
+
+# COMMAND ----------
+# Mount additional lakehouses for cross-lakehouse access using secure context
+try:
+    from notebookutils import mssparkutils
+    
+    # Get current workspace context securely
+    workspace_id = mssparkutils.env.getWorkspaceId()
+    
+    # Mount Bronze lakehouse using lakehouse name (Fabric resolves the ID securely)
+    bronze_mount = "/mnt/bronze"
+    bronze_abfs = f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/stacktrend_bronze_lh.Lakehouse"
+    
+    # Check if already mounted
+    existing_mounts = [mount.mountPoint for mount in mssparkutils.fs.mounts()]
+    if bronze_mount not in existing_mounts:
+        mssparkutils.fs.mount(bronze_abfs, bronze_mount)
+        print(f"✅ Mounted Bronze lakehouse at {bronze_mount}")
+    else:
+        print(f"✅ Bronze lakehouse already mounted at {bronze_mount}")
+        
+except Exception as e:
+    print(f"⚠️ Mount failed, will use cross-lakehouse table references: {e}")
+
+# COMMAND ----------
 # Import required libraries
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
 from pyspark.sql.types import StringType, DoubleType, MapType
-import os
 import sys
 import subprocess
 from datetime import datetime
@@ -57,6 +87,7 @@ LOOKBACK_DAYS = 30  # For velocity calculations
 # COMMAND ----------
 def ensure_stacktrend_imports():
     """Install and import stacktrend package strictly inside a function to satisfy linters."""
+    import os
     try:
         # Try different installation approaches
         github_read_token = os.environ.get("GITHUB_READ_TOKEN")
@@ -239,10 +270,17 @@ extract_lang_dist_udf = F.udf(
 # MAGIC ## Data Loading and Initial Processing
 
 # COMMAND ----------
-# Read Bronze data - from table
+# Read Bronze data using mounted lakehouse or cross-lakehouse reference
 try:
-    # Read from the github_repositories table (cross-lakehouse reference)
-    bronze_df = spark.table("stacktrend_bronze_lh.github_repositories")
+    # Try mounted path first
+    try:
+        bronze_df = spark.read.format("delta").load("/mnt/bronze/Tables/github_repositories")
+        print("✅ Successfully loaded from mounted Bronze lakehouse")
+    except Exception as e:
+        print(f"Error loading from mounted Bronze lakehouse: {e}")
+        # Fallback to cross-lakehouse table reference
+        bronze_df = spark.table("stacktrend_bronze_lh.github_repositories")
+        print("✅ Successfully loaded using cross-lakehouse reference")
     
     # Check if we have any data at all
     total_records = bronze_df.count()
@@ -481,7 +519,7 @@ final_silver_df = silver_validated_df.select(
     "partition_date"
 )
 
-# Write to Silver lakehouse using Delta format
+# Write to Silver lakehouse (using default lakehouse configuration)
 try:
     (final_silver_df
      .write
@@ -489,13 +527,12 @@ try:
      .mode("overwrite")
      .option("overwriteSchema", "true")
      .partitionBy("partition_date", "technology_category")
-     .option("path", "Tables/silver_repositories")
-     .saveAsTable("stacktrend_silver_lh.silver_repositories"))
+     .saveAsTable("silver_repositories"))
     
-    print(f"Successfully wrote {clean_records} records to Silver layer")
+    print(f"✅ Successfully wrote {clean_records} records to Silver layer")
     
 except Exception as e:
-    print(f"Error writing to Silver layer: {e}")
+    print(f"❌ Error saving to Silver lakehouse: {e}")
     raise
 
 # COMMAND ----------
