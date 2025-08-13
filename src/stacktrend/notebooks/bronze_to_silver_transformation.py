@@ -51,9 +51,9 @@ try:
     existing_mounts = [mount.mountPoint for mount in mssparkutils.fs.mounts()]
     if bronze_mount not in existing_mounts:
         mssparkutils.fs.mount(bronze_abfs, bronze_mount)
-        print(f"✅ Mounted Bronze lakehouse at {bronze_mount}")
+        print(f"Mounted Bronze lakehouse at {bronze_mount}")
     else:
-        print(f"✅ Bronze lakehouse already mounted at {bronze_mount}")
+        print(f"Bronze lakehouse already mounted at {bronze_mount}")
         
 except Exception as e:
     print(f"⚠️ Mount failed, will use cross-lakehouse table references: {e}")
@@ -113,9 +113,9 @@ def ensure_stacktrend_imports():
                 sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir",
                 "typing_extensions>=4.8.0", "pydantic>=2.0.0", "openai>=1.0.0"
             ], timeout=120)
-            print("✅ Successfully upgraded dependencies")
+            print("Successfully upgraded dependencies")
         except Exception as e:
-            print(f"⚠️ Warning: Failed to upgrade dependencies: {e}")
+            print(f"Warning: Failed to upgrade dependencies: {e}")
         
         # Now install stacktrend package
         for i, install_url in enumerate(install_attempts):
@@ -124,7 +124,7 @@ def ensure_stacktrend_imports():
                 subprocess.check_call([
                     sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", install_url
                 ], timeout=300)  # 5 minute timeout
-                print("✅ Successfully installed stacktrend package")
+                print("Successfully installed stacktrend package")
                 break
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
                 print(f"❌ Attempt {i+1} failed: {e}")
@@ -139,7 +139,7 @@ def ensure_stacktrend_imports():
                 create_repository_data_from_dict as _create_repository_data_from_dict,
             )
             from stacktrend.config.settings import settings as _settings
-            print("✅ Successfully imported stacktrend modules")
+            print("Successfully imported stacktrend modules")
             return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
             
         except ImportError as import_error:
@@ -160,7 +160,7 @@ def ensure_stacktrend_imports():
                     create_repository_data_from_dict as _create_repository_data_from_dict,
                 )
                 from stacktrend.config.settings import settings as _settings
-                print("✅ Successfully imported after force reinstall")
+                print("Successfully imported after force reinstall")
                 return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
                 
             except Exception as retry_error:
@@ -310,102 +310,79 @@ extract_lang_dist_udf = F.udf(
 # MAGIC ## Data Loading and Initial Processing
 
 # COMMAND ----------
-# Read Bronze data using mounted lakehouse or cross-lakehouse reference
+# Check if Bronze table exists before attempting to read
+print("Verifying Bronze lakehouse table exists...")
 try:
-    bronze_df = None
-    
-    # First, check what tables are available
-    print("Checking available tables in Bronze lakehouse...")
+    # First check if the table exists at all
+    table_exists = False
     try:
-        available_tables = spark.sql("SHOW TABLES IN stacktrend_bronze_lh").collect()
-        print(f"Available tables: {[row.tableName for row in available_tables]}")
-    except Exception as table_check_error:
-        print(f"Could not list tables: {table_check_error}")
+        spark.sql("DESCRIBE TABLE stacktrend_bronze_lh.github_repositories")
+        table_exists = True
+        print("Bronze table exists")
+    except Exception:
+        print("❌ Bronze table does not exist")
+        raise Exception("Bronze table 'github_repositories' does not exist. GitHub Data Ingestion may have failed.")
     
-    # Try multiple approaches to load data
+    # If table exists, try to read it
+    bronze_df = None
     load_attempts = [
-        ("mounted path", lambda: spark.read.format("delta").load("/mnt/bronze/Tables/github_repositories")),
         ("cross-lakehouse table", lambda: spark.table("stacktrend_bronze_lh.github_repositories")),
-        ("simple table name", lambda: spark.table("github_repositories")),
-        ("direct SQL query", lambda: spark.sql("SELECT * FROM stacktrend_bronze_lh.github_repositories"))
+        ("mounted path", lambda: spark.read.format("delta").load("/mnt/bronze/Tables/github_repositories")),
+        ("simple table name", lambda: spark.table("github_repositories"))
     ]
     
     for attempt_name, load_func in load_attempts:
         try:
-            print(f"Attempting to load using {attempt_name}...")
             bronze_df = load_func()
-            print(f"✅ Successfully loaded from {attempt_name}")
+            print(f"Successfully loaded from {attempt_name}")
             break
         except Exception as e:
-            print(f"❌ Failed to load using {attempt_name}: {e}")
+            print(f"Failed to load using {attempt_name}: {str(e)[:100]}")
             continue
     
     if bronze_df is None:
-        raise Exception("❌ All data loading attempts failed. Bronze lakehouse may be empty or inaccessible.")
+        raise Exception("All data loading methods failed")
     
-    # Check if we have any data at all
+    # Verify data integrity
+    total_records = bronze_df.count()
+    print(f"Total records in Bronze layer: {total_records}")
+    
+    if total_records == 0:
+        raise Exception("Bronze table exists but contains no data. Check GitHub Data Ingestion logs.")
+    
+    # Filter to latest partition if available
     try:
-        total_records = bronze_df.count()
-        print(f"Total records in Bronze layer: {total_records}")
-        
-        if total_records == 0:
-            print("⚠️ Bronze layer contains 0 records")
-            # Check the schema to see if table exists but is empty
-            print("Bronze table schema:")
-            bronze_df.printSchema()
-            raise Exception("No data available in Bronze layer - table exists but is empty")
-            
-    except Exception as count_error:
-        print(f"❌ Error counting records: {count_error}")
-        # Try to show schema and first few rows for debugging
-        try:
-            print("Attempting to show Bronze table schema:")
-            bronze_df.printSchema()
-            print("Attempting to show first 5 rows:")
-            bronze_df.show(5, truncate=False)
-        except Exception as debug_error:
-            print(f"❌ Could not debug Bronze table: {debug_error}")
-        raise Exception(f"Error accessing Bronze data: {count_error}")
-    
-    if total_records > 0:
-        # Try to get the latest partition date
-        try:
-            available_dates = (bronze_df
-                              .select("partition_date")
-                              .distinct()
-                              .orderBy(F.desc("partition_date"))
-                              .collect())
-            
-            if available_dates:
-                latest_date = available_dates[0]["partition_date"]
-                bronze_df = bronze_df.where(F.col("partition_date") == latest_date)
-                record_count = bronze_df.count()
-                print(f"Using data from date: {latest_date} ({record_count} records)")
-            else:
-                # No partition dates found, use all data
-                record_count = total_records
-                print(f"No partition dates found, using all {record_count} records")
-                
-        except Exception as partition_error:
-            print(f"⚠️ Error filtering by partition date: {partition_error}")
-            print("Using all available data without date filtering")
+        latest_partition = bronze_df.agg(F.max("partition_date")).collect()[0][0]
+        if latest_partition:
+            bronze_df = bronze_df.filter(F.col("partition_date") == latest_partition)
+            record_count = bronze_df.count()
+            print(f"Using latest partition {latest_partition}: {record_count} records")
+        else:
             record_count = total_records
-    else:
-        raise Exception("No data available in Bronze layer")
+            print(f"No partitions found, using all {record_count} records")
+    except Exception:
+        record_count = total_records
+        print(f"Using all available records: {record_count}")
             
 except Exception as e:
-    print(f"❌ CRITICAL: Error loading Bronze data: {e}")
-    print("\n🔍 Debugging information:")
-    print("1. Check if GitHub Data Ingestion notebook ran successfully")
-    print("2. Verify Bronze lakehouse contains github_repositories table")
-    print("3. Check Data Factory pipeline logs for previous steps")
-    raise Exception(f"Bronze data loading failed: {e}")
+    print(f"❌ Bronze data access failed: {e}")
+    print("Possible causes:")
+    print("1. GitHub Data Ingestion notebook failed")
+    print("2. Data Factory Web Activity returned empty response")
+    print("3. Bronze lakehouse permissions issue")
+    raise
 
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Data Cleaning and Standardization
 
 # COMMAND ----------
+# Verify bronze_df is available before processing
+if 'bronze_df' not in locals() or bronze_df is None:
+    raise Exception("Bronze DataFrame not available. Previous data loading step failed.")
+
+print(f"Starting data cleaning for {record_count} records...")
+
 # Clean and standardize the data
 silver_df_basic = (bronze_df
     # Basic cleaning
@@ -620,7 +597,7 @@ try:
      .partitionBy("partition_date", "technology_category")
      .saveAsTable("silver_repositories"))
     
-    print(f"✅ Successfully wrote {clean_records} records to Silver layer")
+    print(f"Successfully wrote {clean_records} records to Silver layer")
     
 except Exception as e:
     print(f"❌ Error saving to Silver lakehouse: {e}")
