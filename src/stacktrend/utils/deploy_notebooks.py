@@ -90,8 +90,28 @@ class FabricNotebookDeployer:
         
         return None
     
-    def convert_py_to_notebook_format(self, py_content: str) -> str:
-        """Convert Python file to notebook format"""
+    def get_notebook_metadata(self, notebook_id: str) -> dict:
+        """Get existing notebook metadata to preserve lakehouse attachments"""
+        try:
+            url = f"{self.base_url}/workspaces/{self.workspace_id}/notebooks/{notebook_id}/getDefinition"
+            response = requests.post(url, headers=self.get_headers())
+            
+            if response.status_code == 200:
+                definition = response.json()
+                if "definition" in definition and "parts" in definition["definition"]:
+                    for part in definition["definition"]["parts"]:
+                        if part.get("path") == "notebook-content.ipynb":
+                            import base64
+                            content = base64.b64decode(part["payload"]).decode('utf-8')
+                            notebook_json = json.loads(content)
+                            return notebook_json.get("metadata", {})
+            return {}
+        except Exception as e:
+            print(f"Warning: Could not retrieve existing metadata: {e}")
+            return {}
+
+    def convert_py_to_notebook_format(self, py_content: str, existing_metadata: dict = None) -> str:
+        """Convert Python file to notebook format, preserving existing metadata"""
         # Split content by COMMAND ---------- markers
         cells = []
         current_cell = []
@@ -117,15 +137,25 @@ class FabricNotebookDeployer:
         if current_cell:
             cells.append('\n'.join(current_cell))
         
-        # Create notebook structure
+        # Create notebook structure with preserved metadata
+        base_metadata = {
+            "language_info": {
+                "name": "python"
+            }
+        }
+        
+        # Merge with existing metadata to preserve lakehouse attachments
+        if existing_metadata:
+            base_metadata.update(existing_metadata)
+            # Ensure language_info is preserved
+            base_metadata["language_info"] = {
+                "name": "python"
+            }
+        
         notebook = {
             "nbformat": 4,
             "nbformat_minor": 2,
-            "metadata": {
-                "language_info": {
-                    "name": "python"
-                }
-            },
+            "metadata": base_metadata,
             "cells": []
         }
         
@@ -154,11 +184,14 @@ class FabricNotebookDeployer:
         return json.dumps(notebook, indent=2)
     
     def update_notebook(self, notebook_id: str, content: str) -> bool:
-        """Update existing notebook content"""
+        """Update existing notebook content while preserving lakehouse attachments"""
         url = f"{self.base_url}/workspaces/{self.workspace_id}/notebooks/{notebook_id}/updateDefinition"
         
+        # Get existing notebook to preserve lakehouse attachments
+        existing_metadata = self.get_notebook_metadata(notebook_id)
+        
         # Convert content to base64
-        notebook_content = self.convert_py_to_notebook_format(content)
+        notebook_content = self.convert_py_to_notebook_format(content, existing_metadata)
         content_b64 = base64.b64encode(notebook_content.encode('utf-8')).decode('utf-8')
         
         payload = {
