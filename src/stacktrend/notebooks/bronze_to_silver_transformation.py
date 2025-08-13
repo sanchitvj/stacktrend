@@ -87,8 +87,24 @@ LOOKBACK_DAYS = 30  # For velocity calculations
 
 # COMMAND ----------
 def ensure_stacktrend_imports():
-    """Install and import stacktrend package strictly inside a function to satisfy linters."""
+    """
+    Install and import stacktrend package strictly inside a function to satisfy linters.
+    Note: Dynamic imports are necessary here as packages don't exist until installed.
+    """
     import os
+    
+    # First try to import - maybe it's already installed
+    try:
+        from stacktrend.utils.llm_classifier import (
+            LLMRepositoryClassifier as _LLMRepositoryClassifier,
+            create_repository_data_from_dict as _create_repository_data_from_dict,
+        )
+        from stacktrend.config.settings import settings as _settings
+        print("Stacktrend package already available")
+        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+    except ImportError:
+        print("Stacktrend package not found, installing...")
+    
     try:
         # Try different installation approaches
         github_read_token = os.environ.get("GITHUB_READ_TOKEN")
@@ -96,12 +112,74 @@ def ensure_stacktrend_imports():
         
         install_attempts = []
         
-        # Attempt 1: Direct branch reference (most reliable)
+        # Attempt 1: Direct ZIP download (avoids git operations completely)
+        install_attempts.append(f"https://github.com/sanchitvj/stacktrend/archive/{repo_ref}.zip")
+        install_attempts.append("https://github.com/sanchitvj/stacktrend/archive/main.zip")
+        
+        # Attempt 2: Use pip programmatically instead of subprocess
+        try:
+            import pip
+            print("Trying pip programmatic installation...")
+            for url in install_attempts[:2]:  # Only try ZIP downloads first
+                try:
+                    print(f"Installing from {url}")
+                    # Use pip's internal API - different approaches for different pip versions
+                    try:
+                        # Modern pip
+                        from pip._internal import main as pip_main
+                        pip_main(['install', '--upgrade', '--no-cache-dir', url])
+                    except ImportError:
+                        # Older pip
+                        pip.main(['install', '--upgrade', '--no-cache-dir', url])
+                    print("Pip programmatic installation succeeded")
+                    break
+                except Exception as pip_error:
+                    print(f"Pip programmatic install failed: {pip_error}")
+                    continue
+        except ImportError:
+            print("Pip module not available for programmatic use")
+            
+        # Attempt 2.5: Try using importlib and direct download
+        try:
+            import urllib.request
+            import tempfile
+            import zipfile
+            print("Trying direct download and install...")
+            
+            for url in install_attempts[:2]:  # ZIP URLs only
+                try:
+                    print(f"Downloading {url}")
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        zip_path = f"{temp_dir}/stacktrend.zip"
+                        urllib.request.urlretrieve(url, zip_path)
+                        
+                        # Extract zip
+                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                            zip_ref.extractall(temp_dir)
+                        
+                        # Find the extracted directory
+                        extracted_dirs = [d for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d))]
+                        if extracted_dirs:
+                            extracted_path = os.path.join(temp_dir, extracted_dirs[0])
+                            
+                            # Add to Python path
+                            if extracted_path not in sys.path:
+                                sys.path.insert(0, extracted_path)
+                            
+                            print("Direct download installation succeeded")
+                            break
+                except Exception as download_error:
+                    print(f"Direct download failed: {download_error}")
+                    continue
+        except Exception as e:
+            print(f"Direct download approach failed: {e}")
+        
+        # Attempt 3: Git methods as last resort
         if github_read_token:
             install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@{repo_ref}")
         install_attempts.append(f"git+https://github.com/sanchitvj/stacktrend.git@{repo_ref}")
         
-        # Attempt 2: Main branch fallback
+        # Attempt 4: Main branch git fallback
         if github_read_token:
             install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@main")
         install_attempts.append("git+https://github.com/sanchitvj/stacktrend.git@main")
@@ -109,11 +187,17 @@ def ensure_stacktrend_imports():
         # First, upgrade critical dependencies
         print("Upgrading critical dependencies...")
         try:
-            subprocess.check_call([
+            result = subprocess.run([
                 sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir",
                 "typing_extensions>=4.8.0", "pydantic>=2.0.0", "openai>=1.0.0"
-            ], timeout=120)
-            print("Successfully upgraded dependencies")
+            ], timeout=120, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print("Successfully upgraded dependencies")
+            else:
+                print(f"Warning: Dependency upgrade failed with exit code {result.returncode}")
+                if result.stderr:
+                    print(f"Dependency error: {result.stderr[:200]}")
         except Exception as e:
             print(f"Warning: Failed to upgrade dependencies: {e}")
         
@@ -121,12 +205,39 @@ def ensure_stacktrend_imports():
         for i, install_url in enumerate(install_attempts):
             try:
                 print(f"Attempt {i+1}: Installing from {install_url}")
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", install_url
-                ], timeout=300)  # 5 minute timeout
-                print("Successfully installed stacktrend package")
-                break
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                
+                # Different approaches for different URL types
+                if install_url.endswith('.zip'):
+                    # Direct ZIP download - no git involved
+                    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", install_url]
+                else:
+                    # Git URL - add extra flags to suppress git output
+                    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", 
+                           "--quiet", "--no-warn-script-location", install_url]
+                
+                # Redirect stderr to devnull for git operations
+                import os
+                with open(os.devnull, 'w') as devnull:
+                    result = subprocess.run(cmd, timeout=300, stdout=subprocess.PIPE, 
+                                          stderr=devnull if 'git+' in install_url else subprocess.PIPE, 
+                                          text=True)
+                
+                # Check if installation was successful (exit code 0)
+                if result.returncode == 0:
+                    print("Successfully installed stacktrend package")
+                    break
+                else:
+                    print(f"Installation failed with exit code {result.returncode}")
+                    if i == len(install_attempts) - 1:
+                        raise Exception("All installation attempts failed")
+                    continue
+                    
+            except subprocess.TimeoutExpired:
+                print(f"❌ Attempt {i+1} timed out after 5 minutes")
+                if i == len(install_attempts) - 1:
+                    raise Exception("All installation attempts timed out")
+                continue
+            except Exception as e:
                 print(f"❌ Attempt {i+1} failed: {e}")
                 if i == len(install_attempts) - 1:
                     raise Exception("All installation attempts failed")
@@ -149,10 +260,16 @@ def ensure_stacktrend_imports():
             # Try one more dependency upgrade with force-reinstall
             print("Attempting force reinstall of critical dependencies...")
             try:
-                subprocess.check_call([
+                result = subprocess.run([
                     sys.executable, "-m", "pip", "install", "--force-reinstall", "--no-cache-dir",
                     "typing_extensions>=4.9.0", "pydantic>=2.5.0"
-                ], timeout=120)
+                ], timeout=120, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    print(f"Force reinstall failed with exit code {result.returncode}")
+                    if result.stderr:
+                        print(f"Reinstall error: {result.stderr[:200]}")
+                    raise Exception("Force reinstall failed")
                 
                 # Try import again
                 from stacktrend.utils.llm_classifier import (
@@ -169,7 +286,7 @@ def ensure_stacktrend_imports():
     
     except Exception as e:
         print(f"❌ CRITICAL: Failed to install stacktrend package: {e}")
-        print("LLM classification is REQUIRED and cannot proceed without the package")
+        print("LLM classification is MANDATORY and cannot proceed without it")
         raise Exception(f"LLM classification setup failed: {e}")
 
 def extract_language_distribution(language, topics, name):
@@ -216,9 +333,11 @@ def extract_language_distribution(language, topics, name):
     
     return languages
 
+
+
 def classify_repositories_with_llm(repositories_df):
     """
-    Use LLM to classify repositories into smart categories
+    Use LLM to classify repositories into smart categories - LLM ONLY, NO FALLBACKS
     """
     LLMRepositoryClassifier, create_repository_data_from_dict, settings = ensure_stacktrend_imports()
     
