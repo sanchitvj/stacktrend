@@ -44,13 +44,19 @@ spark = SparkSession.builder.appName("Bronze_to_Silver_Transformation").getOrCre
 # MAGIC ## Configuration and Setup
 
 # COMMAND ----------
-# Configuration - Use attached lakehouses
+# Configuration - Use explicit lakehouse references (independent of attachments)
 
 # Processing parameters
 PROCESSING_DATE = datetime.now().strftime("%Y-%m-%d")
 LOOKBACK_DAYS = 30  # For velocity calculations
 
+# Lakehouse configuration (explicit references to avoid attachment dependency)
+BRONZE_LAKEHOUSE = "stacktrend_bronze_lh"
+SILVER_LAKEHOUSE = "stacktrend_silver_lh"
+
 print(f"Processing date: {PROCESSING_DATE}")
+print(f"Bronze lakehouse: {BRONZE_LAKEHOUSE}")
+print(f"Silver lakehouse: {SILVER_LAKEHOUSE}")
 
 # COMMAND ----------
 # MAGIC %md
@@ -223,8 +229,8 @@ extract_lang_dist_udf = F.udf(
 # COMMAND ----------
 # Read Bronze data - from table
 try:
-    # Read from the github_repositories table (with lakehouse prefix)
-    bronze_df = spark.table("stacktrend_bronze_lh.github_repositories")
+    # Read from the github_repositories table (with explicit lakehouse reference)
+    bronze_df = spark.table(f"{BRONZE_LAKEHOUSE}.github_repositories")
     
     # Check if we have any data at all
     total_records = bronze_df.count()
@@ -471,7 +477,7 @@ try:
      .mode("overwrite")
      .option("overwriteSchema", "true")
      .partitionBy("partition_date", "technology_category")
-     .saveAsTable("silver_repositories"))
+     .saveAsTable(f"{SILVER_LAKEHOUSE}.silver_repositories"))
     
     print(f"Successfully wrote {clean_records} records to Silver layer")
     

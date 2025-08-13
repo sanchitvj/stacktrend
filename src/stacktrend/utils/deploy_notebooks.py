@@ -94,28 +94,38 @@ class FabricNotebookDeployer:
         """Get existing notebook metadata to preserve lakehouse attachments"""
         try:
             url = f"{self.base_url}/workspaces/{self.workspace_id}/notebooks/{notebook_id}/getDefinition"
-            response = requests.post(url, headers=self.get_headers())
             
-            print(f"Retrieving metadata for notebook {notebook_id}, status: {response.status_code}")
-            
-            if response.status_code == 200:
-                definition = response.json()
-                print(f"Definition keys: {definition.keys()}")
+            # Try multiple times for async operations
+            for attempt in range(3):
+                response = requests.post(url, headers=self.get_headers())
+                print(f"Retrieving metadata for notebook {notebook_id}, attempt {attempt + 1}, status: {response.status_code}")
                 
-                if "definition" in definition and "parts" in definition["definition"]:
-                    for part in definition["definition"]["parts"]:
-                        if part.get("path") == "notebook-content.ipynb":
-                            content = base64.b64decode(part["payload"]).decode('utf-8')
-                            notebook_json = json.loads(content)
-                            metadata = notebook_json.get("metadata", {})
-                            print(f"Retrieved metadata keys: {metadata.keys()}")
+                if response.status_code == 200:
+                    definition = response.json()
+                    print(f"Definition keys: {definition.keys()}")
+                    
+                    if "definition" in definition and "parts" in definition["definition"]:
+                        for part in definition["definition"]["parts"]:
+                            if part.get("path") == "notebook-content.ipynb":
+                                content = base64.b64decode(part["payload"]).decode('utf-8')
+                                notebook_json = json.loads(content)
+                                metadata = notebook_json.get("metadata", {})
+                                print(f"Retrieved metadata keys: {metadata.keys()}")
+                                
+                                # Preserve all metadata except language_info which we'll override
+                                preserved_metadata = {k: v for k, v in metadata.items() if k != "language_info"}
+                                print(f"Preserving metadata: {preserved_metadata}")
+                                return preserved_metadata
+                
+                elif response.status_code == 202:
+                    print("Async operation in progress, waiting 2 seconds...")
+                    time.sleep(2)
+                    continue
+                else:
+                    print(f"Failed to retrieve metadata: {response.status_code} - {response.text}")
+                    break
                             
-                            # Preserve all metadata except language_info which we'll override
-                            preserved_metadata = {k: v for k, v in metadata.items() if k != "language_info"}
-                            print(f"Preserving metadata: {preserved_metadata}")
-                            return preserved_metadata
-                            
-            print("No metadata found or failed to retrieve")
+            print("No metadata found or failed to retrieve after retries")
             return {}
         except Exception as e:
             print(f"Error retrieving existing metadata: {e}")
@@ -197,8 +207,28 @@ class FabricNotebookDeployer:
         
         return json.dumps(notebook, indent=2)
     
+    def get_notebook_lakehouses(self, notebook_id: str) -> list:
+        """Get lakehouse attachments for a notebook"""
+        try:
+            # List all items in the workspace to find lakehouse attachments
+            url = f"{self.base_url}/workspaces/{self.workspace_id}/items"
+            response = requests.get(url, headers=self.get_headers())
+            
+            if response.status_code == 200:
+                items = response.json().get("value", [])
+                lakehouses = [item for item in items if item.get("type") == "Lakehouse"]
+                print(f"Found {len(lakehouses)} lakehouses in workspace")
+                return lakehouses
+            else:
+                print(f"Failed to get workspace items: {response.status_code}")
+                return []
+        except Exception as e:
+            print(f"Error getting notebook lakehouses: {e}")
+            return []
+
     def update_notebook(self, notebook_id: str, content: str) -> bool:
         """Update existing notebook content while preserving lakehouse attachments"""
+        
         url = f"{self.base_url}/workspaces/{self.workspace_id}/notebooks/{notebook_id}/updateDefinition"
         
         # Get existing notebook to preserve lakehouse attachments
@@ -271,7 +301,7 @@ class FabricNotebookDeployer:
             response = requests.post(url, headers=self.get_headers())
             
             if response.status_code != 200:
-                print(f"Could not retrieve notebook content for comparison, assuming changed")
+                print("Could not retrieve notebook content for comparison, assuming changed")
                 return True
                 
             definition = response.json()
