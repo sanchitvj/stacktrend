@@ -407,14 +407,17 @@ def classify_repositories_with_llm(repositories_df):
         repos_collected = repositories_df.collect()
         
         for row in repos_collected:
+            # Convert PySpark Row to dict for safe access
+            row_dict = row.asDict()
+            
             repo_data = create_repository_data_from_dict({
-                'repository_id': row['repository_id'],
-                'name': row['name'],
-                'full_name': row['full_name'],
-                'description': row.get('description'),
-                'topics': row.get('topics', []),
-                'language': row.get('language'),
-                'stargazers_count': row.get('stargazers_count', 0)
+                'repository_id': row_dict['repository_id'],
+                'name': row_dict['name'],
+                'full_name': row_dict['full_name'],
+                'description': row_dict.get('description'),
+                'topics': row_dict.get('topics', []),
+                'language': row_dict.get('language'),
+                'stargazers_count': row_dict.get('stargazers_count', 0)
             })
             repo_data_list.append(repo_data)
         
