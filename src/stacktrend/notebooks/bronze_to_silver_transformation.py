@@ -50,19 +50,6 @@ spark = SparkSession.builder.appName("Bronze_to_Silver_Transformation").getOrCre
 PROCESSING_DATE = datetime.now().strftime("%Y-%m-%d")
 LOOKBACK_DAYS = 30  # For velocity calculations
 
-# Lakehouse configuration (absolute paths - no attachment required)
-BRONZE_LAKEHOUSE = "stacktrend_bronze_lh"
-SILVER_LAKEHOUSE = "stacktrend_silver_lh"
-WORKSPACE_ID = "060223d7-8152-4dec-97d3-ef2d5d8c6644"  # Your workspace ID from logs
-
-# OneLake absolute paths
-BRONZE_PATH = f"abfss://{WORKSPACE_ID}@onelake.dfs.fabric.microsoft.com/{BRONZE_LAKEHOUSE}.Lakehouse/Tables"
-SILVER_PATH = f"abfss://{WORKSPACE_ID}@onelake.dfs.fabric.microsoft.com/{SILVER_LAKEHOUSE}.Lakehouse/Tables"
-
-print(f"Processing date: {PROCESSING_DATE}")
-print(f"Bronze path: {BRONZE_PATH}")
-print(f"Silver path: {SILVER_PATH}")
-
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## LLM-Based Technology Classification
@@ -234,8 +221,8 @@ extract_lang_dist_udf = F.udf(
 # COMMAND ----------
 # Read Bronze data - from table
 try:
-    # Read from the github_repositories table (using absolute path)
-    bronze_df = spark.read.format("delta").load(f"{BRONZE_PATH}/github_repositories")
+    # Read from the github_repositories table (cross-lakehouse reference)
+    bronze_df = spark.table("stacktrend_bronze_lh.github_repositories")
     
     # Check if we have any data at all
     total_records = bronze_df.count()
@@ -482,7 +469,8 @@ try:
      .mode("overwrite")
      .option("overwriteSchema", "true")
      .partitionBy("partition_date", "technology_category")
-     .save(f"{SILVER_PATH}/silver_repositories"))
+     .option("path", "Tables/silver_repositories")
+     .saveAsTable("stacktrend_silver_lh.silver_repositories"))
     
     print(f"Successfully wrote {clean_records} records to Silver layer")
     
