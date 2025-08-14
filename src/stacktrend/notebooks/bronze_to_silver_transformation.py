@@ -198,7 +198,7 @@ def ensure_stacktrend_imports():
             print("Uninstalled old versions, installing new ones...")
             result = subprocess.run([
                 sys.executable, "-m", "pip", "install", "--no-cache-dir",
-                "typing_extensions>=4.12.0", "pydantic>=2.8.0", "openai>=1.35.0"
+                "typing_extensions>=4.12.0", "pydantic>=2.8.0", "openai>=1.35.0", "nest_asyncio"
             ], timeout=120, capture_output=True, text=True)
             
             if result.returncode == 0:
@@ -320,7 +320,7 @@ def ensure_stacktrend_imports():
                 # Install with specific compatible versions
                 result = subprocess.run([
                     sys.executable, "-m", "pip", "install", "--no-cache-dir",
-                    "typing_extensions==4.12.2", "pydantic==2.8.2", "openai==1.35.15"
+                    "typing_extensions==4.12.2", "pydantic==2.8.2", "openai==1.35.15", "nest_asyncio"
                 ], timeout=120, capture_output=True, text=True)
                 
                 if result.returncode != 0:

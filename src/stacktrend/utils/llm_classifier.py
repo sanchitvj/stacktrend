@@ -128,6 +128,10 @@ Return JSON object with classifications array for all {len(repo_batch)} reposito
     async def _call_llm(self, prompt: str) -> Dict[str, Any]:
         """Make API call to Azure OpenAI with retry logic"""
         try:
+            print(f"🔄 Making LLM API call with model: {self.model}")
+            print(f"🔄 API Version: {self.client._api_version}")
+            print(f"🔄 Endpoint: {self.client._azure_endpoint}")
+            
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -143,16 +147,21 @@ Return JSON object with classifications array for all {len(repo_batch)} reposito
             )
             
             content = response.choices[0].message.content
+            print(f"✅ LLM API call successful, response length: {len(content)}")
             parsed_response = json.loads(content)
-            logger.debug(f"Parsed LLM response: {parsed_response}")
+            print(f"✅ JSON parsing successful, classifications: {len(parsed_response.get('classifications', []))}")
             return parsed_response
             
         except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error: {e}, Content: {content}")
-            raise
+            print(f"❌ JSON decode error: {e}")
+            print(f"❌ Raw content: {content[:500]}...")
+            raise Exception(f"LLM returned invalid JSON: {e}")
         except Exception as e:
-            logger.error(f"LLM API call failed: {e}")
-            raise
+            print(f"❌ LLM API call failed: {e}")
+            print(f"❌ Error type: {type(e).__name__}")
+            print(f"❌ Model: {self.model}")
+            print(f"❌ Endpoint: {self.client._azure_endpoint}")
+            raise Exception(f"Azure OpenAI API error: {e}")
     
     async def _classify_batch(self, repo_batch: List[RepositoryData]) -> List[ClassificationResult]:
         """Classify a batch of repositories"""
@@ -314,20 +323,16 @@ Return JSON object with classifications array for all {len(repo_batch)} reposito
         except RuntimeError:
             # No running loop, safe to use asyncio.run()
             return asyncio.run(self.classify_repositories(repositories))
-        except ImportError:
+        except ImportError as e:
             # nest_asyncio not available, fallback to basic sync behavior
-            logger.warning("Cannot run async classification in sync context. Using fallback classification.")
-            # Return fallback classifications
-            return [
-                ClassificationResult(
-                    repo_id=repo.id,
-                    primary_category="Other",
-                    subcategory="unknown",
-                    confidence=0.1,
-                    classification_timestamp=datetime.now()
-                )
-                for repo in repositories
-            ]
+            print(f"❌ CRITICAL: nest_asyncio not available: {e}")
+            print("❌ LLM classification cannot proceed without async support")
+            raise Exception(f"LLM classification requires nest_asyncio: {e}")
+        except Exception as e:
+            print(f"❌ CRITICAL: LLM classification failed: {e}")
+            print(f"❌ Error type: {type(e).__name__}")
+            print(f"❌ Model: {self.model}")
+            raise Exception(f"LLM classification setup failed: {e}")
 
 
 class ClassificationDriftDetector:
