@@ -1,3 +1,12 @@
+# COMMAND ----------
+# MAGIC %%configure -f
+# MAGIC {
+# MAGIC     "defaultLakehouse": {
+# MAGIC         "name": "stacktrend_silver_lh"
+# MAGIC     }
+# MAGIC }
+
+# COMMAND ----------
 """
 Bronze to Silver Transformation Notebook
 Microsoft Fabric Notebook for cleaning and standardizing GitHub repository data
@@ -27,14 +36,6 @@ Usage in Fabric:
 # MAGIC 6. **Silver Storage**: Write to Silver lakehouse with Delta format
 
 # COMMAND ----------
-# MAGIC %%configure -f
-# MAGIC {
-# MAGIC     "defaultLakehouse": {
-# MAGIC         "name": "stacktrend_silver_lh"
-# MAGIC     }
-# MAGIC }
-
-# COMMAND ----------
 # Mount additional lakehouses for cross-lakehouse access using secure context
 try:
     from notebookutils import mssparkutils
@@ -50,9 +51,9 @@ try:
     existing_mounts = [mount.mountPoint for mount in mssparkutils.fs.mounts()]
     if bronze_mount not in existing_mounts:
         mssparkutils.fs.mount(bronze_abfs, bronze_mount)
-        print(f"✅ Mounted Bronze lakehouse at {bronze_mount}")
+        print(f"Mounted Bronze lakehouse at {bronze_mount}")
     else:
-        print(f"✅ Bronze lakehouse already mounted at {bronze_mount}")
+        print(f"Bronze lakehouse already mounted at {bronze_mount}")
         
 except Exception as e:
     print(f"⚠️ Mount failed, will use cross-lakehouse table references: {e}")
@@ -86,8 +87,24 @@ LOOKBACK_DAYS = 30  # For velocity calculations
 
 # COMMAND ----------
 def ensure_stacktrend_imports():
-    """Install and import stacktrend package strictly inside a function to satisfy linters."""
+    """
+    Install and import stacktrend package strictly inside a function to satisfy linters.
+    Note: Dynamic imports are necessary here as packages don't exist until installed.
+    """
     import os
+    
+    # First try to import - maybe it's already installed
+    try:
+        from stacktrend.utils.llm_classifier import (
+            LLMRepositoryClassifier as _LLMRepositoryClassifier,
+            create_repository_data_from_dict as _create_repository_data_from_dict,
+        )
+        from stacktrend.config.settings import settings as _settings
+        print("Stacktrend package already available")
+        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+    except ImportError:
+        print("Stacktrend package not found, installing...")
+    
     try:
         # Try different installation approaches
         github_read_token = os.environ.get("GITHUB_READ_TOKEN")
@@ -95,41 +112,241 @@ def ensure_stacktrend_imports():
         
         install_attempts = []
         
-        # Attempt 1: Direct branch reference (most reliable)
+        # Attempt 1: Direct ZIP download (avoids git operations completely)
+        install_attempts.append(f"https://github.com/sanchitvj/stacktrend/archive/{repo_ref}.zip")
+        install_attempts.append("https://github.com/sanchitvj/stacktrend/archive/main.zip")
+        
+        # Attempt 2: Use pip programmatically instead of subprocess
+        try:
+            import pip
+            print("Trying pip programmatic installation...")
+            for url in install_attempts[:2]:  # Only try ZIP downloads first
+                try:
+                    print(f"Installing from {url}")
+                    # Use pip's internal API - different approaches for different pip versions
+                    try:
+                        # Modern pip
+                        from pip._internal import main as pip_main
+                        pip_main(['install', '--upgrade', '--no-cache-dir', url])
+                    except ImportError:
+                        # Older pip
+                        pip.main(['install', '--upgrade', '--no-cache-dir', url])
+                    print("Pip programmatic installation succeeded")
+                    break
+                except Exception as pip_error:
+                    print(f"Pip programmatic install failed: {pip_error}")
+                    continue
+        except ImportError:
+            print("Pip module not available for programmatic use")
+            
+        # Attempt 2.5: Try using importlib and direct download
+        try:
+            import urllib.request
+            import tempfile
+            import zipfile
+            print("Trying direct download and install...")
+            
+            for url in install_attempts[:2]:  # ZIP URLs only
+                try:
+                    print(f"Downloading {url}")
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        zip_path = f"{temp_dir}/stacktrend.zip"
+                        urllib.request.urlretrieve(url, zip_path)
+                        
+                        # Extract zip
+                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                            zip_ref.extractall(temp_dir)
+                        
+                        # Find the extracted directory
+                        extracted_dirs = [d for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d))]
+                        if extracted_dirs:
+                            extracted_path = os.path.join(temp_dir, extracted_dirs[0])
+                            
+                            # Add to Python path
+                            if extracted_path not in sys.path:
+                                sys.path.insert(0, extracted_path)
+                            
+                            print("Direct download installation succeeded")
+                            break
+                except Exception as download_error:
+                    print(f"Direct download failed: {download_error}")
+                    continue
+        except Exception as e:
+            print(f"Direct download approach failed: {e}")
+        
+        # Attempt 3: Git methods as last resort
         if github_read_token:
             install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@{repo_ref}")
         install_attempts.append(f"git+https://github.com/sanchitvj/stacktrend.git@{repo_ref}")
         
-        # Attempt 2: Main branch fallback
+        # Attempt 4: Main branch git fallback
         if github_read_token:
             install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@main")
         install_attempts.append("git+https://github.com/sanchitvj/stacktrend.git@main")
         
+        # First, upgrade critical dependencies with force reload
+        print("Upgrading critical dependencies with force reload...")
+        try:
+            import sys
+            
+            # Force uninstall and reinstall to avoid cached imports
+            subprocess.run([
+                sys.executable, "-m", "pip", "uninstall", "-y", 
+                "typing_extensions", "pydantic", "openai", "typing-inspection"
+            ], timeout=60, capture_output=True, text=True)
+            
+            print("Uninstalled old versions, installing new ones...")
+            result = subprocess.run([
+                sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                "typing_extensions>=4.12.0", "pydantic>=2.8.0", "openai>=1.35.0", "nest_asyncio"
+            ], timeout=120, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print("Successfully upgraded dependencies with force reload")
+                
+                # Force clear all related modules from memory
+                modules_to_clear = [
+                    'typing_extensions', 'pydantic', 'openai', 'typing_inspection',
+                    'typing_inspection.introspection', 'typing_inspection.typing_objects'
+                ]
+                
+                print("Clearing modules from memory to force fresh imports...")
+                for module_name in modules_to_clear:
+                    if module_name in sys.modules:
+                        print(f"Removing {module_name} from sys.modules")
+                        try:
+                            del sys.modules[module_name]
+                        except Exception as clear_error:
+                            print(f"Could not clear {module_name}: {clear_error}")
+                
+                # Also clear any submodules
+                modules_to_remove = []
+                for module_name in sys.modules.keys():
+                    if any(module_name.startswith(prefix) for prefix in ['typing_extensions', 'pydantic', 'openai', 'typing_inspection']):
+                        modules_to_remove.append(module_name)
+                
+                for module_name in modules_to_remove:
+                    try:
+                        del sys.modules[module_name]
+                        print(f"Cleared submodule: {module_name}")
+                    except Exception:
+                        pass
+                            
+            else:
+                print(f"Warning: Dependency upgrade failed with exit code {result.returncode}")
+                if result.stderr:
+                    print(f"Dependency error: {result.stderr[:200]}")
+        except Exception as e:
+            print(f"Warning: Failed to upgrade dependencies: {e}")
+        
+        # Now install stacktrend package
         for i, install_url in enumerate(install_attempts):
             try:
                 print(f"Attempt {i+1}: Installing from {install_url}")
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", install_url
-                ], timeout=300)  # 5 minute timeout
-                print("✅ Successfully installed stacktrend package")
-                break
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                
+                # Different approaches for different URL types
+                import sys
+                import os
+                
+                if install_url.endswith('.zip'):
+                    # Direct ZIP download - no git involved
+                    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", install_url]
+                else:
+                    # Git URL - add extra flags to suppress git output
+                    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", 
+                           "--quiet", "--no-warn-script-location", install_url]
+                
+                # Redirect stderr to devnull for git operations
+                with open(os.devnull, 'w') as devnull:
+                    result = subprocess.run(cmd, timeout=300, stdout=subprocess.PIPE, 
+                                          stderr=devnull if 'git+' in install_url else subprocess.PIPE, 
+                                          text=True)
+                
+                # Check if installation was successful (exit code 0)
+                if result.returncode == 0:
+                    print("Successfully installed stacktrend package")
+                    break
+                else:
+                    print(f"Installation failed with exit code {result.returncode}")
+                    if i == len(install_attempts) - 1:
+                        raise Exception("All installation attempts failed")
+                    continue
+                    
+            except subprocess.TimeoutExpired:
+                print(f"❌ Attempt {i+1} timed out after 5 minutes")
+                if i == len(install_attempts) - 1:
+                    raise Exception("All installation attempts timed out")
+                continue
+            except Exception as e:
                 print(f"❌ Attempt {i+1} failed: {e}")
                 if i == len(install_attempts) - 1:
                     raise Exception("All installation attempts failed")
                 continue
 
-        from stacktrend.utils.llm_classifier import (
-            LLMRepositoryClassifier as _LLMRepositoryClassifier,
-            create_repository_data_from_dict as _create_repository_data_from_dict,
-        )
-        from stacktrend.config.settings import settings as _settings
-
-        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+        # Try importing with restart if needed
+        try:
+            from stacktrend.utils.llm_classifier import (
+                LLMRepositoryClassifier as _LLMRepositoryClassifier,
+                create_repository_data_from_dict as _create_repository_data_from_dict,
+            )
+            from stacktrend.config.settings import settings as _settings
+            print("Successfully imported stacktrend modules")
+            return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+            
+        except ImportError as import_error:
+            print(f"❌ Import error after installation: {import_error}")
+            print("This might be due to dependency conflicts in the current Python session")
+            
+            # Try one more dependency upgrade with complete environment reset
+            print("Attempting complete dependency reset...")
+            try:
+                import sys
+                
+                # Uninstall everything first
+                subprocess.run([
+                    sys.executable, "-m", "pip", "uninstall", "-y", 
+                    "typing_extensions", "pydantic", "openai", "typing-inspection", "stacktrend"
+                ], timeout=60, capture_output=True, text=True)
+                
+                # Clear all related modules from memory
+                all_modules_to_clear = list(sys.modules.keys())
+                for module_name in all_modules_to_clear:
+                    if any(prefix in module_name for prefix in ['typing_extensions', 'pydantic', 'openai', 'typing_inspection', 'stacktrend']):
+                        try:
+                            del sys.modules[module_name]
+                        except Exception:
+                            pass
+                
+                # Install with specific compatible versions
+                result = subprocess.run([
+                    sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                    "typing_extensions==4.12.2", "pydantic==2.8.2", "openai==1.35.15", "nest_asyncio"
+                ], timeout=120, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    print(f"Complete reset failed with exit code {result.returncode}")
+                    if result.stderr:
+                        print(f"Reset error: {result.stderr[:200]}")
+                    raise Exception("Complete dependency reset failed")
+                else:
+                    print("Complete dependency reset successful")
+                
+                # Try import again
+                from stacktrend.utils.llm_classifier import (
+                    LLMRepositoryClassifier as _LLMRepositoryClassifier,
+                    create_repository_data_from_dict as _create_repository_data_from_dict,
+                )
+                from stacktrend.config.settings import settings as _settings
+                print("Successfully imported after force reinstall")
+                return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+                
+            except Exception as retry_error:
+                print(f"❌ Force reinstall also failed: {retry_error}")
+                raise ImportError(f"Cannot import stacktrend modules due to dependency conflicts: {import_error}")
     
     except Exception as e:
         print(f"❌ CRITICAL: Failed to install stacktrend package: {e}")
-        print("LLM classification is REQUIRED and cannot proceed without the package")
+        print("LLM classification is MANDATORY and cannot proceed without it")
         raise Exception(f"LLM classification setup failed: {e}")
 
 def extract_language_distribution(language, topics, name):
@@ -176,9 +393,11 @@ def extract_language_distribution(language, topics, name):
     
     return languages
 
+
+
 def classify_repositories_with_llm(repositories_df):
     """
-    Use LLM to classify repositories into smart categories
+    Use LLM to classify repositories into smart categories - LLM ONLY, NO FALLBACKS
     """
     LLMRepositoryClassifier, create_repository_data_from_dict, settings = ensure_stacktrend_imports()
     
@@ -188,14 +407,17 @@ def classify_repositories_with_llm(repositories_df):
         repos_collected = repositories_df.collect()
         
         for row in repos_collected:
+            # Convert PySpark Row to dict for safe access
+            row_dict = row.asDict()
+            
             repo_data = create_repository_data_from_dict({
-                'repository_id': row['repository_id'],
-                'name': row['name'],
-                'full_name': row['full_name'],
-                'description': row.get('description'),
-                'topics': row.get('topics', []),
-                'language': row.get('language'),
-                'stargazers_count': row.get('stargazers_count', 0)
+                'repository_id': row_dict['repository_id'],
+                'name': row_dict['name'],
+                'full_name': row_dict['full_name'],
+                'description': row_dict.get('description'),
+                'topics': row_dict.get('topics', []),
+                'language': row_dict.get('language'),
+                'stargazers_count': row_dict.get('stargazers_count', 0)
             })
             repo_data_list.append(repo_data)
         
@@ -270,44 +492,66 @@ extract_lang_dist_udf = F.udf(
 # MAGIC ## Data Loading and Initial Processing
 
 # COMMAND ----------
-# Read Bronze data using mounted lakehouse or cross-lakehouse reference
+# Check if Bronze table exists before attempting to read
+print("Verifying Bronze lakehouse table exists...")
 try:
-    # Try mounted path first
+    # First check if the table exists at all
+    table_exists = False
     try:
-        bronze_df = spark.read.format("delta").load("/mnt/bronze/Tables/github_repositories")
-        print("✅ Successfully loaded from mounted Bronze lakehouse")
-    except Exception as e:
-        print(f"Error loading from mounted Bronze lakehouse: {e}")
-        # Fallback to cross-lakehouse table reference
-        bronze_df = spark.table("stacktrend_bronze_lh.github_repositories")
-        print("✅ Successfully loaded using cross-lakehouse reference")
+        spark.sql("DESCRIBE TABLE stacktrend_bronze_lh.github_repositories")
+        table_exists = True
+        print("Bronze table exists")
+    except Exception:
+        print("❌ Bronze table does not exist")
+        raise Exception("Bronze table 'github_repositories' does not exist. GitHub Data Ingestion may have failed.")
     
-    # Check if we have any data at all
+    # If table exists, try to read it
+    bronze_df = None
+    load_attempts = [
+        ("cross-lakehouse table", lambda: spark.table("stacktrend_bronze_lh.github_repositories")),
+        ("mounted path", lambda: spark.read.format("delta").load("/mnt/bronze/Tables/github_repositories")),
+        ("simple table name", lambda: spark.table("github_repositories"))
+    ]
+    
+    for attempt_name, load_func in load_attempts:
+        try:
+            bronze_df = load_func()
+            print(f"Successfully loaded from {attempt_name}")
+            break
+        except Exception as e:
+            print(f"Failed to load using {attempt_name}: {str(e)[:100]}")
+            continue
+    
+    if bronze_df is None:
+        raise Exception("All data loading methods failed")
+    
+    # Verify data integrity
     total_records = bronze_df.count()
     print(f"Total records in Bronze layer: {total_records}")
     
-    if total_records > 0:
-        # Try to get the latest partition date
-        available_dates = (bronze_df
-                          .select("partition_date")
-                          .distinct()
-                          .orderBy(F.desc("partition_date"))
-                          .collect())
-        
-        if available_dates:
-            latest_date = available_dates[0]["partition_date"]
-            bronze_df = bronze_df.where(F.col("partition_date") == latest_date)
+    if total_records == 0:
+        raise Exception("Bronze table exists but contains no data. Check GitHub Data Ingestion logs.")
+    
+    # Filter to latest partition if available
+    try:
+        latest_partition = bronze_df.agg(F.max("partition_date")).collect()[0][0]
+        if latest_partition:
+            bronze_df = bronze_df.filter(F.col("partition_date") == latest_partition)
             record_count = bronze_df.count()
-            print(f"Using data from date: {latest_date} ({record_count} records)")
+            print(f"Using latest partition {latest_partition}: {record_count} records")
         else:
-            # No partition dates found, use all data
             record_count = total_records
-            print(f"No partition dates found, using all {record_count} records")
-    else:
-        raise Exception("No data available in Bronze layer")
+            print(f"No partitions found, using all {record_count} records")
+    except Exception:
+        record_count = total_records
+        print(f"Using all available records: {record_count}")
             
 except Exception as e:
-    print(f"Error loading Bronze data: {e}")
+    print(f"❌ Bronze data access failed: {e}")
+    print("Possible causes:")
+    print("1. GitHub Data Ingestion notebook failed")
+    print("2. Data Factory Web Activity returned empty response")
+    print("3. Bronze lakehouse permissions issue")
     raise
 
 # COMMAND ----------
@@ -315,6 +559,12 @@ except Exception as e:
 # MAGIC ## Data Cleaning and Standardization
 
 # COMMAND ----------
+# Verify bronze_df is available before processing
+if 'bronze_df' not in locals() or bronze_df is None:
+    raise Exception("Bronze DataFrame not available. Previous data loading step failed.")
+
+print(f"Starting data cleaning for {record_count} records...")
+
 # Clean and standardize the data
 silver_df_basic = (bronze_df
     # Basic cleaning

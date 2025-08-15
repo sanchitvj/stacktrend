@@ -44,7 +44,7 @@ class LLMRepositoryClassifier:
     Azure OpenAI-based repository classifier
     """
     
-    def __init__(self, api_key: str, endpoint: str, api_version: str = "2025-01-01-preview", model: str = "gpt-4.1-mini"):
+    def __init__(self, api_key: str, endpoint: str, api_version: str = "2025-01-01-preview", model: str = "gpt-4o-mini"):
         """Initialize the LLM classifier"""
         self.client = AsyncAzureOpenAI(
             api_key=api_key,
@@ -58,30 +58,31 @@ class LLMRepositoryClassifier:
     def _create_classification_prompt(self, repo_batch: List[RepositoryData]) -> str:
         """Create classification prompt for a batch of repositories"""
         
-        prompt = f"""Classify these {len(repo_batch)} GitHub repositories into primary and subcategories.
+        prompt = f"""You are an expert software engineer analyzing GitHub repositories. Classify these {len(repo_batch)} repositories into technology categories based on their PRIMARY purpose and functionality.
 
 PRIMARY CATEGORIES (choose exactly one):
-- AI: Artificial Intelligence, LLMs, agents, neural networks
-- ML: Machine Learning, traditional ML, MLOps, model serving  
-- DataEngineering: ETL, pipelines, orchestration, analytics engineering
-- Database: SQL, NoSQL, vector databases, graph databases
-- WebDev: Frontend, backend, fullstack, mobile development
-- DevOps: Containerization, CI/CD, monitoring, infrastructure
-- Other: Everything else
+- AI: Artificial Intelligence, neural networks, LLMs, generative AI, computer vision, NLP
+- ML: Machine Learning, model training, MLOps, data science, statistical learning
+- DataEngineering: ETL, data pipelines, stream processing, data orchestration, analytics engineering  
+- Database: SQL/NoSQL databases, vector stores, caching, data storage systems
+- WebDev: Web frameworks, frontend/backend development, mobile apps, APIs
+- DevOps: Infrastructure, CI/CD, containerization, monitoring, deployment tools
+- Other: Programming languages, general utilities, gaming, system tools
 
-SUBCATEGORY EXAMPLES:
-- AI: agentic, generative, nlp, computer_vision, llm_tools
-- ML: deep_learning, traditional_ml, mlops, model_serving, automl
-- DataEngineering: orchestration, streaming, etl, analytics_engineering, data_quality
-- Database: sql, nosql, vector_db, graph_db, time_series
-- WebDev: frontend, backend, fullstack, mobile, api
-- DevOps: containerization, ci_cd, monitoring, infrastructure, security
+SUBCATEGORY GUIDELINES:
+- AI: generative_ai, computer_vision, nlp, llm_tools, ai_agents, neural_networks
+- ML: deep_learning, machine_learning, mlops, data_science, model_serving
+- DataEngineering: etl, streaming, orchestration, analytics_engineering, data_quality
+- Database: relational, nosql, vector_db, caching, time_series, graph_db
+- WebDev: frontend, backend, fullstack, mobile, api, web_framework
+- DevOps: containerization, ci_cd, monitoring, infrastructure, security, cloud
 
-IMPORTANT RULES:
-1. Focus on the repository's PRIMARY purpose, not just the programming language
-2. If unclear, use repository name, description, and topics to determine purpose
-3. Choose the most specific subcategory that fits
-4. Confidence should be 0.0-1.0 (1.0 = completely certain)
+CLASSIFICATION RULES:
+1. Analyze the repository NAME, DESCRIPTION, and TOPICS to understand its main purpose
+2. Choose the category that represents the PRIMARY use case, not just the programming language
+3. Be decisive - avoid "Other" unless truly unclear
+4. Confidence: 0.9+ for clear cases, 0.7+ for reasonable certainty, 0.5+ for educated guesses
+5. Look for key technology indicators in the name/description
 
 Return ONLY a valid JSON object with a "classifications" array:
 {{
@@ -127,6 +128,10 @@ Return JSON object with classifications array for all {len(repo_batch)} reposito
     async def _call_llm(self, prompt: str) -> Dict[str, Any]:
         """Make API call to Azure OpenAI with retry logic"""
         try:
+            print(f"🔄 Making LLM API call with model: {self.model}")
+            print(f"🔄 API Version: {self.client._api_version}")
+            print(f"🔄 Endpoint: {self.client._azure_endpoint}")
+            
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -142,16 +147,21 @@ Return JSON object with classifications array for all {len(repo_batch)} reposito
             )
             
             content = response.choices[0].message.content
+            print(f"✅ LLM API call successful, response length: {len(content)}")
             parsed_response = json.loads(content)
-            logger.debug(f"Parsed LLM response: {parsed_response}")
+            print(f"✅ JSON parsing successful, classifications: {len(parsed_response.get('classifications', []))}")
             return parsed_response
             
         except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error: {e}, Content: {content}")
-            raise
+            print(f"❌ JSON decode error: {e}")
+            print(f"❌ Raw content: {content[:500]}...")
+            raise Exception(f"LLM returned invalid JSON: {e}")
         except Exception as e:
-            logger.error(f"LLM API call failed: {e}")
-            raise
+            print(f"❌ LLM API call failed: {e}")
+            print(f"❌ Error type: {type(e).__name__}")
+            print(f"❌ Model: {self.model}")
+            print(f"❌ Endpoint: {self.client._azure_endpoint}")
+            raise Exception(f"Azure OpenAI API error: {e}")
     
     async def _classify_batch(self, repo_batch: List[RepositoryData]) -> List[ClassificationResult]:
         """Classify a batch of repositories"""
@@ -313,20 +323,16 @@ Return JSON object with classifications array for all {len(repo_batch)} reposito
         except RuntimeError:
             # No running loop, safe to use asyncio.run()
             return asyncio.run(self.classify_repositories(repositories))
-        except ImportError:
+        except ImportError as e:
             # nest_asyncio not available, fallback to basic sync behavior
-            logger.warning("Cannot run async classification in sync context. Using fallback classification.")
-            # Return fallback classifications
-            return [
-                ClassificationResult(
-                    repo_id=repo.id,
-                    primary_category="Other",
-                    subcategory="unknown",
-                    confidence=0.1,
-                    classification_timestamp=datetime.now()
-                )
-                for repo in repositories
-            ]
+            print(f"❌ CRITICAL: nest_asyncio not available: {e}")
+            print("❌ LLM classification cannot proceed without async support")
+            raise Exception(f"LLM classification requires nest_asyncio: {e}")
+        except Exception as e:
+            print(f"❌ CRITICAL: LLM classification failed: {e}")
+            print(f"❌ Error type: {type(e).__name__}")
+            print(f"❌ Model: {self.model}")
+            raise Exception(f"LLM classification setup failed: {e}")
 
 
 class ClassificationDriftDetector:
