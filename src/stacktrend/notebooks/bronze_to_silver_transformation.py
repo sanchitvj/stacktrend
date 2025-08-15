@@ -779,7 +779,7 @@ try:
      .partitionBy("partition_date", "technology_category")
      .saveAsTable("silver_repositories"))
     
-    print(f"Successfully wrote {clean_records} records to Silver layer")
+    print(f"✅ Successfully wrote {clean_records} records to Silver layer")
     
 except Exception as e:
     print(f"❌ Error saving to Silver lakehouse: {e}")

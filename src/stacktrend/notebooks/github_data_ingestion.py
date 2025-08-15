@@ -27,6 +27,14 @@ Usage in Fabric Data Factory:
 # MAGIC This notebook ingests GitHub API response data and saves it to the Bronze lakehouse in Delta format.
 
 # COMMAND ----------
+# MAGIC %%configure -f
+# MAGIC {
+# MAGIC     "defaultLakehouse": {
+# MAGIC         "name": "stacktrend_bronze_lh"
+# MAGIC     }
+# MAGIC }
+
+# COMMAND ----------
 # Import required libraries
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
