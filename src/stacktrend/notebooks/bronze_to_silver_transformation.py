@@ -7,19 +7,19 @@
 # MAGIC }
 
 # COMMAND ----------
-"""
-Bronze to Silver Transformation Notebook
-Microsoft Fabric Notebook for cleaning and standardizing GitHub repository data
-
-This notebook transforms raw GitHub API responses from Bronze layer into
-clean, standardized data in the Silver layer following medallion architecture.
-
-Usage in Fabric:
-1. Import this file as a new notebook
-2. Attach to a Spark compute
-3. Run cells to process data
-4. Schedule via Data Factory pipeline
-"""
+# MAGIC %md
+# MAGIC # Bronze to Silver Transformation Notebook
+# MAGIC 
+# MAGIC Microsoft Fabric Notebook for cleaning and standardizing GitHub repository data
+# MAGIC 
+# MAGIC This notebook transforms raw GitHub API responses from Bronze layer into
+# MAGIC clean, standardized data in the Silver layer following medallion architecture.
+# MAGIC 
+# MAGIC ## Usage in Fabric:
+# MAGIC 1. Import this file as a new notebook
+# MAGIC 2. Attach to a Spark compute
+# MAGIC 3. Run cells to process data
+# MAGIC 4. Schedule via Data Factory pipeline
 
 # COMMAND ----------
 # MAGIC %md

@@ -7,19 +7,19 @@
 # MAGIC }
 
 # COMMAND ----------
-"""
-Silver to Gold Analytics Transformation Notebook
-Microsoft Fabric Notebook for generating analytics and metrics from Silver layer data
-
-This notebook transforms clean Silver layer data into analytics-ready datasets
-in the Gold layer, including technology momentum scores, trend analysis, and rankings.
-
-Usage in Fabric:
-1. Import this file as a new notebook
-2. Attach to a Spark compute
-3. Run cells to generate analytics
-4. Schedule via Data Factory pipeline
-"""
+# MAGIC %md
+# MAGIC # Silver to Gold Analytics Transformation Notebook
+# MAGIC 
+# MAGIC Microsoft Fabric Notebook for generating analytics and metrics from Silver layer data
+# MAGIC 
+# MAGIC This notebook transforms clean Silver layer data into analytics-ready datasets
+# MAGIC in the Gold layer, including technology momentum scores, trend analysis, and rankings.
+# MAGIC 
+# MAGIC ## Usage in Fabric:
+# MAGIC 1. Import this file as a new notebook
+# MAGIC 2. Attach to a Spark compute
+# MAGIC 3. Run cells to generate analytics
+# MAGIC 4. Schedule via Data Factory pipeline
 
 # COMMAND ----------
 # MAGIC %md
@@ -50,12 +50,12 @@ try:
     existing_mounts = [mount.mountPoint for mount in mssparkutils.fs.mounts()]
     if silver_mount not in existing_mounts:
         mssparkutils.fs.mount(silver_abfs, silver_mount)
-        print(f"✅ Mounted Silver lakehouse at {silver_mount}")
+        print(f"SUCCESS: Mounted Silver lakehouse at {silver_mount}")
     else:
-        print(f"✅ Silver lakehouse already mounted at {silver_mount}")
+        print(f"SUCCESS: Silver lakehouse already mounted at {silver_mount}")
         
 except Exception as e:
-    print(f"⚠️ Mount failed, will use cross-lakehouse table references: {e}")
+    print(f"WARNING: Mount failed, will use cross-lakehouse table references: {e}")
 
 # COMMAND ----------
 # Import required libraries
@@ -89,12 +89,12 @@ try:
     # Try mounted path first, fallback to cross-lakehouse reference
     try:
         silver_df = spark.read.format("delta").load("/mnt/silver/Tables/silver_repositories")
-        print("✅ Successfully loaded from mounted Silver lakehouse")
+        print("SUCCESS: Successfully loaded from mounted Silver lakehouse")
     except Exception as e:
         print(f"Error loading from mounted Silver lakehouse: {e}")
         # Fallback to cross-lakehouse table reference
         silver_df = spark.table("stacktrend_silver_lh.silver_repositories")
-        print("✅ Successfully loaded using cross-lakehouse reference")
+        print("SUCCESS: Successfully loaded using cross-lakehouse reference")
     
     # Check if we have any data at all
     total_records = silver_df.count()
@@ -328,7 +328,7 @@ try:
      .saveAsTable("gold_technology_metrics"))
     
     gold_record_count = final_gold_df.count()
-    print(f"✅ Successfully wrote {gold_record_count} records to Gold layer")
+    print(f"SUCCESS: Successfully wrote {gold_record_count} records to Gold layer")
     
 except Exception as e:
     print(f"❌ Error saving to Gold lakehouse: {e}")
