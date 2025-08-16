@@ -128,10 +128,6 @@ Return JSON object with classifications array for all {len(repo_batch)} reposito
     async def _call_llm(self, prompt: str) -> Dict[str, Any]:
         """Make API call to Azure OpenAI with retry logic"""
         try:
-            print(f"🔄 Making LLM API call with model: {self.model}")
-            print(f"🔄 API Version: {self.client._api_version}")
-            print(f"🔄 Endpoint: {self.client._azure_endpoint}")
-            
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -141,26 +137,36 @@ Return JSON object with classifications array for all {len(repo_batch)} reposito
                     },
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=self.max_tokens,
-                temperature=0.1,  # Low temperature for consistent results
+                max_completion_tokens=self.max_tokens,  # Updated parameter name for 2025 API
+                # temperature=1 is default and only supported value for o4-mini
                 response_format={"type": "json_object"}
             )
             
             content = response.choices[0].message.content
-            print(f"✅ LLM API call successful, response length: {len(content)}")
             parsed_response = json.loads(content)
-            print(f"✅ JSON parsing successful, classifications: {len(parsed_response.get('classifications', []))}")
             return parsed_response
             
         except json.JSONDecodeError as e:
-            print(f"❌ JSON decode error: {e}")
-            print(f"❌ Raw content: {content[:500]}...")
+            print(f"ERROR: JSON decode error: {e}")
+            print(f"ERROR: Raw content: {content[:500]}...")
             raise Exception(f"LLM returned invalid JSON: {e}")
         except Exception as e:
-            print(f"❌ LLM API call failed: {e}")
-            print(f"❌ Error type: {type(e).__name__}")
-            print(f"❌ Model: {self.model}")
-            print(f"❌ Endpoint: {self.client._azure_endpoint}")
+            print(f"ERROR: LLM API call failed: {e}")
+            print(f"ERROR: Error type: {type(e).__name__}")
+            print(f"ERROR: Model: {self.model}")
+            print(f"ERROR: Endpoint: {self.client._azure_endpoint}")
+            
+            # Check for common deployment name issues
+            error_str = str(e).lower()
+            if "deploymentnotfound" in error_str or "model not found" in error_str or "404" in error_str:
+                print("\nPOSSIBLE ISSUE: Model deployment name mismatch!")
+                print(f"You're trying to use model: '{self.model}'")
+                print("In Azure OpenAI, the 'model' parameter should be your DEPLOYMENT NAME, not the base model name")
+                print("Check your Azure OpenAI Studio -> Deployments to see the actual deployment name")
+                print("Common examples:")
+                print("   - Base model: 'gpt-4o-mini' -> Deployment name might be: 'my-gpt4o-mini', 'gpt4omini', etc.")
+                print("   - Set AZURE_OPENAI_MODEL to your actual deployment name, not 'gpt-4o-mini'")
+            
             raise Exception(f"Azure OpenAI API error: {e}")
     
     async def _classify_batch(self, repo_batch: List[RepositoryData]) -> List[ClassificationResult]:
@@ -325,13 +331,8 @@ Return JSON object with classifications array for all {len(repo_batch)} reposito
             return asyncio.run(self.classify_repositories(repositories))
         except ImportError as e:
             # nest_asyncio not available, fallback to basic sync behavior
-            print(f"❌ CRITICAL: nest_asyncio not available: {e}")
-            print("❌ LLM classification cannot proceed without async support")
             raise Exception(f"LLM classification requires nest_asyncio: {e}")
         except Exception as e:
-            print(f"❌ CRITICAL: LLM classification failed: {e}")
-            print(f"❌ Error type: {type(e).__name__}")
-            print(f"❌ Model: {self.model}")
             raise Exception(f"LLM classification setup failed: {e}")
 
 

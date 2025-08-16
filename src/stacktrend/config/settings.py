@@ -59,8 +59,8 @@ class Settings:
     # Azure OpenAI Configuration for LLM Classification
     AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
     AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
-    AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
-    AZURE_OPENAI_MODEL = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o-mini")
+    AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+    AZURE_OPENAI_MODEL = os.getenv("AZURE_OPENAI_MODEL", "o4-mini")
     
     @classmethod
     def validate(cls):
