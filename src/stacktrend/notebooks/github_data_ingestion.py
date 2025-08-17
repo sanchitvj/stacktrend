@@ -54,46 +54,29 @@ PROCESSING_DATE = datetime.now().strftime("%Y-%m-%d")
 # MAGIC In Fabric Data Factory, the Web Activity output will be passed as a notebook parameter
 
 # COMMAND ----------
-# Get the GitHub API response from pipeline parameter
-print("DEBUGGING: Checking for Data Factory pipeline parameters...")
-github_response = None
+# PARAMETERS CELL: Define parameters that Data Factory will pass
+# This cell must be marked as "parameter cell" in Fabric (click ... → Toggle parameter cell)
+github_api_response = ""
 
-try:
-    from notebookutils import mssparkutils
-    
-    # Get all parameters for debugging
-    params = mssparkutils.notebook.getParameters()
-    print(f"All available parameters: {list(params.keys())}")
-    
-    if 'github_api_response' in params:
-        github_response = params['github_api_response']
-        print("SUCCESS: Found 'github_api_response' parameter")
+# COMMAND ----------
+# Get the GitHub API response from Data Factory parameter
+print("DEBUGGING: Checking for Data Factory pipeline parameters...")
+
+# Validate parameter from Data Factory
+if github_api_response and str(github_api_response).strip():
+    # Check if it's not just empty/null values
+    if str(github_api_response).strip() not in ["null", "None", "{}", "[]", ""]:
+        github_response = github_api_response
+        print("SUCCESS: Found 'github_api_response' parameter from Data Factory")
         print(f"Parameter type: {type(github_response)}")
         print(f"Parameter length: {len(str(github_response))} characters")
-        
-        # Check if it's empty or just whitespace
-        if not github_response or str(github_response).strip() == "":
-            print("WARNING: Parameter exists but is empty or whitespace")
-            github_response = None
-        elif str(github_response).strip() in ["null", "None", "{}", "[]"]:
-            print("WARNING: Parameter contains null/empty values")
-            github_response = None
-        else:
-            print(f"SUCCESS: Valid parameter received: {str(github_response)[:200]}...")
+        print(f"SUCCESS: Valid parameter received: {str(github_response)[:200]}...")
     else:
-        print("ERROR: 'github_api_response' parameter not found")
-        
-        # Try alternative parameter names
-        alternative_names = ['github_response', 'api_response', 'web_activity_output']
-        for alt_name in alternative_names:
-            if alt_name in params:
-                print(f"Found alternative parameter: {alt_name}")
-                github_response = params[alt_name]
-                break
-                
-except Exception as e:
-        print(f"ERROR: Error accessing pipeline parameters: {e}")
-        raise
+        print("WARNING: Parameter contains null/empty values")
+        github_response = None
+else:
+    print("ERROR: 'github_api_response' parameter not found or empty")
+    github_response = None
 
 # Final parameter validation
 if github_response:
