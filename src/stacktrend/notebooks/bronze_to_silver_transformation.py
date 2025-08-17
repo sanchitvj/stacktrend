@@ -59,38 +59,44 @@ except Exception as e:
             print(f"WARNING: Mount failed, will use cross-lakehouse table references: {e}")
 
 # COMMAND ----------
-# SECURE: Get Azure OpenAI credentials from Data Factory Pipeline Parameters
+# SECURE: Get Azure OpenAI credentials from Data Factory Parameters (same method as ingestion)
 import os
+
 try:
     from notebookutils import mssparkutils
     
-    # Get Data Factory pipeline parameters
+    # Get all parameters for debugging (same as ingestion notebook)
     params = mssparkutils.notebook.getParameters()
-    print("Available pipeline parameters:", list(params.keys()))
+    print(f"All available parameters: {list(params.keys())}")
     
     # Get Azure OpenAI credentials from pipeline parameters
-    api_key = params.get("azure_openai_api_key")
-    endpoint = params.get("azure_openai_endpoint")
+    azure_openai_api_key = params.get("azure_openai_api_key")
+    azure_openai_endpoint = params.get("azure_openai_endpoint")
+    azure_openai_api_version = params.get("azure_openai_api_version", "2025-01-01-preview")
+    azure_openai_model = params.get("azure_openai_model", "o4-mini")
     
-    if api_key and endpoint:
+    if azure_openai_api_key and azure_openai_endpoint:
         # Set environment variables for the LLM classifier
-        os.environ['AZURE_OPENAI_API_KEY'] = api_key
-        os.environ['AZURE_OPENAI_ENDPOINT'] = endpoint
-        os.environ['AZURE_OPENAI_API_VERSION'] = '2025-01-01-preview'
-        os.environ['AZURE_OPENAI_MODEL'] = 'o4-mini'
+        os.environ['AZURE_OPENAI_API_KEY'] = azure_openai_api_key
+        os.environ['AZURE_OPENAI_ENDPOINT'] = azure_openai_endpoint
+        os.environ['AZURE_OPENAI_API_VERSION'] = azure_openai_api_version
+        os.environ['AZURE_OPENAI_MODEL'] = azure_openai_model
         
         print("SUCCESS: Azure OpenAI credentials loaded from Data Factory parameters")
-        print(f"Endpoint: {endpoint}")
-        print(f"API Key: {'*' * 8}...{api_key[-4:] if len(api_key) > 4 else '***'}")
+        print(f"Endpoint: {azure_openai_endpoint}")
+        print(f"API Version: {azure_openai_api_version}")
+        print(f"Model: {azure_openai_model}")
+        print(f"API Key: {'*' * 8}...{azure_openai_api_key[-4:] if len(azure_openai_api_key) > 4 else '***'}")
     else:
-        print("ERROR: Azure OpenAI credentials not found in Data Factory parameters")
-        print("Missing parameters:")
-        if not api_key:
-            print("- azure_openai_api_key")
-        if not endpoint:
-            print("- azure_openai_endpoint")
-        print("\nPlease add these parameters to your Data Factory pipeline")
-        raise Exception("Azure OpenAI credentials not configured in Data Factory")
+        missing = []
+        if not azure_openai_api_key:
+            missing.append("azure_openai_api_key")
+        if not azure_openai_endpoint:
+            missing.append("azure_openai_endpoint")
+        
+        print(f"ERROR: Missing required parameters: {missing}")
+        print("Make sure these parameters are configured in your Data Factory notebook activity")
+        raise Exception(f"Missing required Azure OpenAI parameters: {missing}")
         
 except Exception as e:
     print(f"CRITICAL: Failed to load Azure OpenAI credentials: {e}")
