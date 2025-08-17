@@ -59,58 +59,57 @@ except Exception as e:
             print(f"WARNING: Mount failed, will use cross-lakehouse table references: {e}")
 
 # COMMAND ----------
-# SECURE: Get Azure OpenAI credentials from Data Factory Parameters (same method as ingestion)
-import os
-
-try:
-    from notebookutils import mssparkutils
-    
-    # Get all parameters for debugging (same as ingestion notebook)
-    params = mssparkutils.notebook.getParameters()
-    print(f"All available parameters: {list(params.keys())}")
-    
-    # Get Azure OpenAI credentials from pipeline parameters
-    azure_openai_api_key = params.get("azure_openai_api_key")
-    azure_openai_endpoint = params.get("azure_openai_endpoint")
-    azure_openai_api_version = params.get("azure_openai_api_version", "2025-01-01-preview")
-    azure_openai_model = params.get("azure_openai_model", "o4-mini")
-    
-    if azure_openai_api_key and azure_openai_endpoint:
-        # Set environment variables for the LLM classifier
-        os.environ['AZURE_OPENAI_API_KEY'] = azure_openai_api_key
-        os.environ['AZURE_OPENAI_ENDPOINT'] = azure_openai_endpoint
-        os.environ['AZURE_OPENAI_API_VERSION'] = azure_openai_api_version
-        os.environ['AZURE_OPENAI_MODEL'] = azure_openai_model
-        
-        print("SUCCESS: Azure OpenAI credentials loaded from Data Factory parameters")
-        print(f"Endpoint: {azure_openai_endpoint}")
-        print(f"API Version: {azure_openai_api_version}")
-        print(f"Model: {azure_openai_model}")
-        print(f"API Key: {'*' * 8}...{azure_openai_api_key[-4:] if len(azure_openai_api_key) > 4 else '***'}")
-    else:
-        missing = []
-        if not azure_openai_api_key:
-            missing.append("azure_openai_api_key")
-        if not azure_openai_endpoint:
-            missing.append("azure_openai_endpoint")
-        
-        print(f"ERROR: Missing required parameters: {missing}")
-        print("Make sure these parameters are configured in your Data Factory notebook activity")
-        raise Exception(f"Missing required Azure OpenAI parameters: {missing}")
-        
-except Exception as e:
-    print(f"CRITICAL: Failed to load Azure OpenAI credentials: {e}")
-    print("LLM classification will fail without proper credentials")
-    raise
-
-# COMMAND ----------
-# Import required libraries
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
 from pyspark.sql.types import StringType, DoubleType, MapType
 import sys
 import subprocess
 from datetime import datetime
+import os
+
+# COMMAND ----------
+# PARAMETERS CELL: Define parameters that Data Factory will pass
+# This cell must be marked as "parameter cell" in Fabric (click ... → Toggle parameter cell)
+azure_openai_api_key = ""
+azure_openai_endpoint = ""
+azure_openai_api_version = "2025-01-01-preview"
+azure_openai_model = "o4-mini"
+
+# COMMAND ----------
+# SECURE: Configure Azure OpenAI credentials from Data Factory parameters
+
+
+print("Configuring Azure OpenAI credentials from Data Factory parameters...")
+
+# Validate that required parameters were passed from Data Factory
+if not azure_openai_api_key or not azure_openai_endpoint:
+    missing = []
+    if not azure_openai_api_key:
+        missing.append("azure_openai_api_key")
+    if not azure_openai_endpoint:
+        missing.append("azure_openai_endpoint")
+    
+    print(f"ERROR: Missing required parameters: {missing}")
+    print("\nTo fix this:")
+    print("1. Mark the first cell as 'parameter cell' in the notebook (click ... → Toggle parameter cell)")
+    print("2. Configure these Base parameters in your Data Factory notebook activity:")
+    print("   - azure_openai_api_key: Your Azure OpenAI API key")
+    print("   - azure_openai_endpoint: Your Azure OpenAI endpoint URL")
+    print("   - azure_openai_api_version: API version (optional)")
+    print("   - azure_openai_model: Model deployment name (optional)")
+    raise Exception(f"Missing required Azure OpenAI parameters: {missing}")
+
+# Set environment variables for the LLM classifier
+os.environ['AZURE_OPENAI_API_KEY'] = azure_openai_api_key
+os.environ['AZURE_OPENAI_ENDPOINT'] = azure_openai_endpoint
+os.environ['AZURE_OPENAI_API_VERSION'] = azure_openai_api_version
+os.environ['AZURE_OPENAI_MODEL'] = azure_openai_model
+
+print("SUCCESS: Azure OpenAI credentials configured from Data Factory parameters")
+print(f"Endpoint: {azure_openai_endpoint}")
+print(f"API Version: {azure_openai_api_version}")
+print(f"Model: {azure_openai_model}")
+print(f"API Key: {'*' * 8}...{azure_openai_api_key[-4:] if len(azure_openai_api_key) > 4 else '***'}")
 
 
 spark = SparkSession.builder.appName("Bronze_to_Silver_Transformation").getOrCreate()
@@ -274,8 +273,9 @@ def ensure_stacktrend_imports():
                     try:
                         del sys.modules[module_name]
                         print(f"Cleared submodule: {module_name}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"Warning: Could not clear submodule {module_name}: {e}")
+                        raise
                             
             else:
                 print(f"Warning: Dependency upgrade failed with exit code {result.returncode}")

@@ -92,7 +92,8 @@ try:
                 break
                 
 except Exception as e:
-            print(f"ERROR: Error accessing pipeline parameters: {e}")
+        print(f"ERROR: Error accessing pipeline parameters: {e}")
+        raise
 
 # Final parameter validation
 if github_response:
