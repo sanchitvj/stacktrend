@@ -7,32 +7,24 @@
 # MAGIC }
 
 # COMMAND ----------
-"""
-GitHub Data Ingestion Notebook
-Microsoft Fabric Notebook for ingesting GitHub API data into Bronze lakehouse
-
-This notebook takes GitHub API JSON response and saves it to Bronze lakehouse
-in Delta format for further processing.
-
-Usage in Fabric Data Factory:
-1. Connect as Notebook Activity after Web Activity
-2. Pass Web Activity output as parameter: @activity('get_repo').output
-3. Notebook saves data to Bronze lakehouse
-"""
+# MAGIC %md
+# MAGIC # GitHub Data Ingestion Notebook
+# MAGIC 
+# MAGIC Microsoft Fabric Notebook for ingesting GitHub API data into Bronze lakehouse
+# MAGIC 
+# MAGIC This notebook takes GitHub API JSON response and saves it to Bronze lakehouse
+# MAGIC in Delta format for further processing.
+# MAGIC 
+# MAGIC ## Usage in Fabric Data Factory:
+# MAGIC 1. Connect as Notebook Activity after Web Activity
+# MAGIC 2. Pass Web Activity output as parameter: @activity('get_repo').output
+# MAGIC 3. Notebook saves data to Bronze lakehouse
 
 # COMMAND ----------
 # MAGIC %md
 # MAGIC # GitHub Data Ingestion to Bronze Layer
 # MAGIC 
 # MAGIC This notebook ingests GitHub API response data and saves it to the Bronze lakehouse in Delta format.
-
-# COMMAND ----------
-# MAGIC %%configure -f
-# MAGIC {
-# MAGIC     "defaultLakehouse": {
-# MAGIC         "name": "stacktrend_bronze_lh"
-# MAGIC     }
-# MAGIC }
 
 # COMMAND ----------
 # Import required libraries
@@ -62,51 +54,35 @@ PROCESSING_DATE = datetime.now().strftime("%Y-%m-%d")
 # MAGIC In Fabric Data Factory, the Web Activity output will be passed as a notebook parameter
 
 # COMMAND ----------
-# Get the GitHub API response from pipeline parameter
-print("🔍 Checking for Data Factory pipeline parameters...")
-github_response = None
+# PARAMETERS CELL: Define parameters that Data Factory will pass
+# This cell must be marked as "parameter cell" in Fabric (click ... → Toggle parameter cell)
+github_api_response = ""
 
-try:
-    from notebookutils import mssparkutils
-    
-    # Get all parameters for debugging
-    params = mssparkutils.notebook.getParameters()
-    print(f"All available parameters: {list(params.keys())}")
-    
-    if 'github_api_response' in params:
-        github_response = params['github_api_response']
-        print("✅ Found 'github_api_response' parameter")
+# COMMAND ----------
+# Get the GitHub API response from Data Factory parameter
+print("DEBUGGING: Checking for Data Factory pipeline parameters...")
+
+# Validate parameter from Data Factory
+if github_api_response and str(github_api_response).strip():
+    # Check if it's not just empty/null values
+    if str(github_api_response).strip() not in ["null", "None", "{}", "[]", ""]:
+        github_response = github_api_response
+        print("SUCCESS: Found 'github_api_response' parameter from Data Factory")
         print(f"Parameter type: {type(github_response)}")
         print(f"Parameter length: {len(str(github_response))} characters")
-        
-        # Check if it's empty or just whitespace
-        if not github_response or str(github_response).strip() == "":
-            print("⚠️ Parameter exists but is empty or whitespace")
-            github_response = None
-        elif str(github_response).strip() in ["null", "None", "{}", "[]"]:
-            print("⚠️ Parameter contains null/empty values")
-            github_response = None
-        else:
-            print(f"✅ Valid parameter received: {str(github_response)[:200]}...")
+        print(f"SUCCESS: Valid parameter received: {str(github_response)[:200]}...")
     else:
-        print("❌ 'github_api_response' parameter not found")
-        
-        # Try alternative parameter names
-        alternative_names = ['github_response', 'api_response', 'web_activity_output']
-        for alt_name in alternative_names:
-            if alt_name in params:
-                print(f"Found alternative parameter: {alt_name}")
-                github_response = params[alt_name]
-                break
-                
-except Exception as e:
-    print(f"❌ Error accessing pipeline parameters: {e}")
+        print("WARNING: Parameter contains null/empty values")
+        github_response = None
+else:
+    print("ERROR: 'github_api_response' parameter not found or empty")
+    github_response = None
 
 # Final parameter validation
 if github_response:
-    print(f"✅ SUCCESS: Using pipeline parameter ({len(str(github_response))} characters)")
+    print(f"SUCCESS: Using pipeline parameter ({len(str(github_response))} characters)")
 else:
-    print("❌ No valid pipeline parameter found - falling back to direct GitHub API call")
+    print("ERROR: No valid pipeline parameter found - falling back to direct GitHub API call")
     print("This usually means:")
     print("1. Data Factory Web Activity failed")
     print("2. Parameter name mismatch in Data Factory pipeline")
@@ -314,22 +290,22 @@ except Exception as e:
 try:
     if record_count > 0:
         bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repositories")
-        print(f"✅ Saved {record_count} records to Bronze lakehouse")
+        print(f"SUCCESS: Saved {record_count} records to Bronze lakehouse")
     else:
-        print("⚠️ No data to save - creating empty table with proper schema")
+        print("WARNING: No data to save - creating empty table with proper schema")
         # Save the empty DataFrame with schema to ensure table exists
         bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repositories")
-        print("✅ Created empty Bronze table with proper schema")
+        print("SUCCESS: Created empty Bronze table with proper schema")
         
         # Log the issue for debugging
-        print("🔍 Debugging: No repositories were ingested")
+        print("DEBUGGING: No repositories were ingested")
         print("Possible causes:")
         print("1. GitHub API parameter not passed from Data Factory")
         print("2. GitHub API calls failed (rate limits, network issues)")
         print("3. Empty API responses")
     
 except Exception as e:
-    print(f"❌ Error saving to Bronze lakehouse: {e}")
+    print(f"ERROR: Error saving to Bronze lakehouse: {e}")
     print(f"Record count: {record_count}")
     print("DataFrame schema:")
     bronze_df.printSchema()

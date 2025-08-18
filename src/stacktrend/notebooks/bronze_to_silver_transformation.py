@@ -7,19 +7,19 @@
 # MAGIC }
 
 # COMMAND ----------
-"""
-Bronze to Silver Transformation Notebook
-Microsoft Fabric Notebook for cleaning and standardizing GitHub repository data
-
-This notebook transforms raw GitHub API responses from Bronze layer into
-clean, standardized data in the Silver layer following medallion architecture.
-
-Usage in Fabric:
-1. Import this file as a new notebook
-2. Attach to a Spark compute
-3. Run cells to process data
-4. Schedule via Data Factory pipeline
-"""
+# MAGIC %md
+# MAGIC # Bronze to Silver Transformation Notebook
+# MAGIC 
+# MAGIC Microsoft Fabric Notebook for cleaning and standardizing GitHub repository data
+# MAGIC 
+# MAGIC This notebook transforms raw GitHub API responses from Bronze layer into
+# MAGIC clean, standardized data in the Silver layer following medallion architecture.
+# MAGIC 
+# MAGIC ## Usage in Fabric:
+# MAGIC 1. Import this file as a new notebook
+# MAGIC 2. Attach to a Spark compute
+# MAGIC 3. Run cells to process data
+# MAGIC 4. Schedule via Data Factory pipeline
 
 # COMMAND ----------
 # MAGIC %md
@@ -56,16 +56,60 @@ try:
         print(f"Bronze lakehouse already mounted at {bronze_mount}")
         
 except Exception as e:
-    print(f"⚠️ Mount failed, will use cross-lakehouse table references: {e}")
+            print(f"WARNING: Mount failed, will use cross-lakehouse table references: {e}")
 
 # COMMAND ----------
-# Import required libraries
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
 from pyspark.sql.types import StringType, DoubleType, MapType
 import sys
 import subprocess
 from datetime import datetime
+import os
+
+# COMMAND ----------
+# PARAMETERS CELL: Define parameters that Data Factory will pass
+# This cell must be marked as "parameter cell" in Fabric (click ... → Toggle parameter cell)
+azure_openai_api_key = ""
+azure_openai_endpoint = ""
+azure_openai_api_version = "2025-01-01-preview"
+azure_openai_model = "o4-mini"
+
+# COMMAND ----------
+# SECURE: Configure Azure OpenAI credentials from Data Factory parameters
+
+
+print("Configuring Azure OpenAI credentials from Data Factory parameters...")
+
+# Validate that required parameters were passed from Data Factory
+if not azure_openai_api_key or not azure_openai_endpoint:
+    missing = []
+    if not azure_openai_api_key:
+        missing.append("azure_openai_api_key")
+    if not azure_openai_endpoint:
+        missing.append("azure_openai_endpoint")
+    
+    print(f"ERROR: Missing required parameters: {missing}")
+    print("\nTo fix this:")
+    print("1. Mark the first cell as 'parameter cell' in the notebook (click ... → Toggle parameter cell)")
+    print("2. Configure these Base parameters in your Data Factory notebook activity:")
+    print("   - azure_openai_api_key: Your Azure OpenAI API key")
+    print("   - azure_openai_endpoint: Your Azure OpenAI endpoint URL")
+    print("   - azure_openai_api_version: API version (optional)")
+    print("   - azure_openai_model: Model deployment name (optional)")
+    raise Exception(f"Missing required Azure OpenAI parameters: {missing}")
+
+# Set environment variables for the LLM classifier
+os.environ['AZURE_OPENAI_API_KEY'] = azure_openai_api_key
+os.environ['AZURE_OPENAI_ENDPOINT'] = azure_openai_endpoint
+os.environ['AZURE_OPENAI_API_VERSION'] = azure_openai_api_version
+os.environ['AZURE_OPENAI_MODEL'] = azure_openai_model
+
+print("SUCCESS: Azure OpenAI credentials configured from Data Factory parameters")
+print(f"Endpoint: {azure_openai_endpoint}")
+print(f"API Version: {azure_openai_api_version}")
+print(f"Model: {azure_openai_model}")
+print(f"API Key: {'*' * 8}...{azure_openai_api_key[-4:] if len(azure_openai_api_key) > 4 else '***'}")
 
 
 spark = SparkSession.builder.appName("Bronze_to_Silver_Transformation").getOrCreate()
@@ -229,8 +273,9 @@ def ensure_stacktrend_imports():
                     try:
                         del sys.modules[module_name]
                         print(f"Cleared submodule: {module_name}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"Warning: Could not clear submodule {module_name}: {e}")
+                        raise
                             
             else:
                 print(f"Warning: Dependency upgrade failed with exit code {result.returncode}")
@@ -273,12 +318,12 @@ def ensure_stacktrend_imports():
                     continue
                     
             except subprocess.TimeoutExpired:
-                print(f"❌ Attempt {i+1} timed out after 5 minutes")
+                print(f"ERROR: Attempt {i+1} timed out after 5 minutes")
                 if i == len(install_attempts) - 1:
                     raise Exception("All installation attempts timed out")
                 continue
             except Exception as e:
-                print(f"❌ Attempt {i+1} failed: {e}")
+                print(f"ERROR: Attempt {i+1} failed: {e}")
                 if i == len(install_attempts) - 1:
                     raise Exception("All installation attempts failed")
                 continue
@@ -294,7 +339,7 @@ def ensure_stacktrend_imports():
             return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
             
         except ImportError as import_error:
-            print(f"❌ Import error after installation: {import_error}")
+            print(f"ERROR: Import error after installation: {import_error}")
             print("This might be due to dependency conflicts in the current Python session")
             
             # Try one more dependency upgrade with complete environment reset
@@ -314,8 +359,9 @@ def ensure_stacktrend_imports():
                     if any(prefix in module_name for prefix in ['typing_extensions', 'pydantic', 'openai', 'typing_inspection', 'stacktrend']):
                         try:
                             del sys.modules[module_name]
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"Warning: Module clearing failed: {e}")
+                            # Continue with other modules
                 
                 # Install with specific compatible versions
                 result = subprocess.run([
@@ -341,11 +387,11 @@ def ensure_stacktrend_imports():
                 return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
                 
             except Exception as retry_error:
-                print(f"❌ Force reinstall also failed: {retry_error}")
+                print(f"ERROR: Force reinstall also failed: {retry_error}")
                 raise ImportError(f"Cannot import stacktrend modules due to dependency conflicts: {import_error}")
     
     except Exception as e:
-        print(f"❌ CRITICAL: Failed to install stacktrend package: {e}")
+        print(f"ERROR: CRITICAL: Failed to install stacktrend package: {e}")
         print("LLM classification is MANDATORY and cannot proceed without it")
         raise Exception(f"LLM classification setup failed: {e}")
 
@@ -422,30 +468,35 @@ def classify_repositories_with_llm(repositories_df):
             repo_data_list.append(repo_data)
         
         # Initialize LLM classifier
-        classifier = LLMRepositoryClassifier(
-            api_key=settings.AZURE_OPENAI_API_KEY,
-            endpoint=settings.AZURE_OPENAI_ENDPOINT,
-            api_version=settings.AZURE_OPENAI_API_VERSION,
-            model=settings.AZURE_OPENAI_MODEL
-        )
+        try:
+            classifier = LLMRepositoryClassifier(
+                api_key=settings.AZURE_OPENAI_API_KEY,
+                endpoint=settings.AZURE_OPENAI_ENDPOINT,
+                api_version=settings.AZURE_OPENAI_API_VERSION,
+                model=settings.AZURE_OPENAI_MODEL
+            )
+        except Exception as e:
+            raise Exception(f"LLM Classifier initialization failed: {e}")
         
         # Classify repositories
-        print(f"Classifying {len(repo_data_list)} repositories with LLM...")
-        classifications = classifier.classify_repositories_sync(repo_data_list)
+        try:
+            classifications = classifier.classify_repositories_sync(repo_data_list)
+        except Exception as e:
+            raise Exception(f"LLM classification failed: {e}")
         
         # Convert results back to Spark DataFrame format
-        classification_map = {
-            c.repo_id: {
+        classification_map = {}
+        for c in classifications:
+            classification_map[c.repo_id] = {
                 'primary_category': c.primary_category,
                 'subcategory': c.subcategory,
                 'confidence': c.confidence
             }
-            for c in classifications
-        }
         
         # Add classifications to original DataFrame
         def add_classification(repo_id):
-            classification = classification_map.get(str(repo_id), {
+            str_repo_id = str(repo_id)
+            classification = classification_map.get(str_repo_id, {
                 'primary_category': 'Other',
                 'subcategory': 'unknown',
                 'confidence': 0.1
@@ -493,17 +544,15 @@ extract_lang_dist_udf = F.udf(
 
 # COMMAND ----------
 # Check if Bronze table exists before attempting to read
-print("Verifying Bronze lakehouse table exists...")
 try:
     # First check if the table exists at all
     table_exists = False
     try:
         spark.sql("DESCRIBE TABLE stacktrend_bronze_lh.github_repositories")
         table_exists = True
-        print("Bronze table exists")
-    except Exception:
-        print("❌ Bronze table does not exist")
-        raise Exception("Bronze table 'github_repositories' does not exist. GitHub Data Ingestion may have failed.")
+    except Exception as e:
+        print(f"Failed to check table existence: {e}")
+        raise
     
     # If table exists, try to read it
     bronze_df = None
@@ -516,10 +565,9 @@ try:
     for attempt_name, load_func in load_attempts:
         try:
             bronze_df = load_func()
-            print(f"Successfully loaded from {attempt_name}")
             break
         except Exception as e:
-            print(f"Failed to load using {attempt_name}: {str(e)[:100]}")
+            print(f"Failed to load from {attempt_name}: {e}")
             continue
     
     if bronze_df is None:
@@ -527,7 +575,6 @@ try:
     
     # Verify data integrity
     total_records = bronze_df.count()
-    print(f"Total records in Bronze layer: {total_records}")
     
     if total_records == 0:
         raise Exception("Bronze table exists but contains no data. Check GitHub Data Ingestion logs.")
@@ -538,21 +585,14 @@ try:
         if latest_partition:
             bronze_df = bronze_df.filter(F.col("partition_date") == latest_partition)
             record_count = bronze_df.count()
-            print(f"Using latest partition {latest_partition}: {record_count} records")
         else:
             record_count = total_records
-            print(f"No partitions found, using all {record_count} records")
-    except Exception:
+    except Exception as e:
+        print(f"Failed to filter to latest partition: {e}")
         record_count = total_records
-        print(f"Using all available records: {record_count}")
-            
+        
 except Exception as e:
-    print(f"❌ Bronze data access failed: {e}")
-    print("Possible causes:")
-    print("1. GitHub Data Ingestion notebook failed")
-    print("2. Data Factory Web Activity returned empty response")
-    print("3. Bronze lakehouse permissions issue")
-    raise
+    raise Exception(f"Bronze data access failed: {e}")
 
 # COMMAND ----------
 # MAGIC %md
@@ -562,8 +602,6 @@ except Exception as e:
 # Verify bronze_df is available before processing
 if 'bronze_df' not in locals() or bronze_df is None:
     raise Exception("Bronze DataFrame not available. Previous data loading step failed.")
-
-print(f"Starting data cleaning for {record_count} records...")
 
 # Clean and standardize the data
 silver_df_basic = (bronze_df
@@ -616,12 +654,8 @@ silver_df_basic = (bronze_df
     .withColumn("data_quality_flags", F.array())  # Initialize empty array
 )
 
-print("Applied basic cleaning and standardization")
-
 # Apply LLM-based classification
-print("Starting LLM-based technology classification...")
 silver_df = classify_repositories_with_llm(silver_df_basic)
-print("LLM classification completed")
 
 # COMMAND ----------
 # MAGIC %md 
@@ -673,37 +707,12 @@ silver_with_metrics_df = (silver_df
           "has_recent_activity", "reasonable_size")
 )
 
-print("Calculated velocity and health metrics")
-
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## Data Quality Validation
 
 # COMMAND ----------
 # Apply data quality rules and flag issues
-def validate_record(row):
-    """Validate a record and return quality flags."""
-    flags = []
-    
-    # Check for missing critical data
-    if not row["name"] or row["name"].strip() == "":
-        flags.append("missing_name")
-    
-    if row["stargazers_count"] < 0:
-        flags.append("negative_stars")
-        
-    if row["forks_count"] < 0:
-        flags.append("negative_forks")
-    
-    if row["created_at"] is None:
-        flags.append("missing_created_date")
-        
-    if row["community_health_score"] < 0 or row["community_health_score"] > 100:
-        flags.append("invalid_health_score")
-    
-    return flags
-
-# Apply validation (simplified version - in production use DataFrame operations)
 silver_validated_df = (silver_with_metrics_df
     # Add basic validation flags using DataFrame operations
     .withColumn("data_quality_flags",
@@ -724,11 +733,6 @@ silver_validated_df = (silver_with_metrics_df
 total_records = silver_with_metrics_df.count()
 clean_records = silver_validated_df.count()
 rejected_records = total_records - clean_records
-
-print("Data quality validation completed")
-print(f"Total records: {total_records:,}")
-print(f"Clean records: {clean_records:,}")
-print(f"Rejected records: {rejected_records:,}")
 
 # COMMAND ----------
 # MAGIC %md
@@ -779,10 +783,10 @@ try:
      .partitionBy("partition_date", "technology_category")
      .saveAsTable("silver_repositories"))
     
-    print(f"✅ Successfully wrote {clean_records} records to Silver layer")
+    print(f"Successfully wrote {clean_records} records to Silver layer")
     
 except Exception as e:
-    print(f"❌ Error saving to Silver lakehouse: {e}")
+    print(f"ERROR: Error saving to Silver lakehouse: {e}")
     raise
 
 # COMMAND ----------
@@ -790,20 +794,10 @@ except Exception as e:
 # MAGIC ## Summary and Next Steps
 
 # COMMAND ----------
-# Display processing summary
-print(f"Processing Date: {PROCESSING_DATE}")
-print(f"Records Processed: {total_records}")
-print(f"Records Written to Silver: {clean_records}")
-print(f"Data Quality Issues: {rejected_records}")
-print(f"Success Rate: {(clean_records/total_records)*100:.1f}%")
-
 # Show technology category distribution
 tech_distribution = (final_silver_df
                      .groupBy("technology_category")
                      .count()
                      .orderBy(F.desc("count")))
 
-print("Technology Category Distribution:")
 tech_distribution.show(10, truncate=False)
-
-print("Bronze to Silver transformation completed successfully")
