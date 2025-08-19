@@ -70,10 +70,15 @@ import os
 # COMMAND ----------
 # PARAMETERS CELL: Define parameters that Data Factory will pass
 # This cell must be marked as "parameter cell" in Fabric (click ... → Toggle parameter cell)
-azure_openai_api_key = ""
-azure_openai_endpoint = ""
-azure_openai_api_version = "2025-01-01-preview"
-azure_openai_model = "o4-mini"
+# Only set if not already defined (prevents overwriting actual values from Data Factory)
+if 'azure_openai_api_key' not in locals() or not azure_openai_api_key:  # noqa: F821
+    azure_openai_api_key = ""
+if 'azure_openai_endpoint' not in locals() or not azure_openai_endpoint:  # noqa: F821
+    azure_openai_endpoint = ""
+if 'azure_openai_api_version' not in locals() or not azure_openai_api_version:  # noqa: F821
+    azure_openai_api_version = "2025-01-01-preview"
+if 'azure_openai_model' not in locals() or not azure_openai_model:  # noqa: F821
+    azure_openai_model = "o4-mini"
 
 # COMMAND ----------
 # SECURE: Configure Azure OpenAI credentials from Data Factory parameters
