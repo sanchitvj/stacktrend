@@ -6,6 +6,7 @@ on:
     paths: 
       - 'src/stacktrend/notebooks/**'
       - 'src/stacktrend/utils/deploy_notebooks.py'
+      - 'src/stacktrend/utils/llm_classifier.py'
       - 'src/stacktrend/config/settings.py'
       - '.github/workflows/deploy-fabric-notebooks.yml'
 
