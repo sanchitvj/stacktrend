@@ -134,6 +134,10 @@ Repositories to classify:
     async def _call_llm(self, prompt: str) -> Dict[str, Any]:
         """Make API call to Azure OpenAI with retry logic"""
         try:
+            print(f"🔄 Making LLM API call with model: {self.model}")
+            print(f"🔄 API Version: {self.client._api_version}")
+            print(f"🔄 Endpoint: {self.client._azure_endpoint}")
+            
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -149,6 +153,7 @@ Repositories to classify:
             )
             
             content = response.choices[0].message.content
+            print(f"✅ LLM API call successful, response length: {len(content)}")
             parsed_response = json.loads(content)
             return parsed_response
             
