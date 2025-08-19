@@ -472,13 +472,13 @@ def classify_repositories_with_llm(repositories_df):
             })
             repo_data_list.append(repo_data)
         
-        # Initialize LLM classifier
+        # Initialize LLM classifier using environment variables directly
         try:
             classifier = LLMRepositoryClassifier(
-                api_key=settings.AZURE_OPENAI_API_KEY,
-                endpoint=settings.AZURE_OPENAI_ENDPOINT,
-                api_version=settings.AZURE_OPENAI_API_VERSION,
-                model=settings.AZURE_OPENAI_MODEL
+                api_key=os.environ.get('AZURE_OPENAI_API_KEY'),
+                endpoint=os.environ.get('AZURE_OPENAI_ENDPOINT'),
+                api_version=os.environ.get('AZURE_OPENAI_API_VERSION', '2025-01-01-preview'),
+                model=os.environ.get('AZURE_OPENAI_MODEL', 'o4-mini')
             )
         except Exception as e:
             raise Exception(f"LLM Classifier initialization failed: {e}")

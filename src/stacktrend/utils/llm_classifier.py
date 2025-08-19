@@ -44,7 +44,7 @@ class LLMRepositoryClassifier:
     Azure OpenAI-based repository classifier
     """
     
-    def __init__(self, api_key: str, endpoint: str, api_version: str = "2025-01-01-preview", model: str = "gpt-4o-mini"):
+    def __init__(self, api_key: str, endpoint: str, api_version: str = "2025-01-01-preview", model: str = "o4-mini"):
         """Initialize the LLM classifier"""
         self.client = AsyncAzureOpenAI(
             api_key=api_key,
@@ -124,7 +124,27 @@ Return ONLY a valid JSON object with a "classifications" array:
 
 Repositories to classify:
 """
-
+        
+        for i, repo in enumerate(repo_batch, 1):
+            topics_str = ", ".join(repo.topics[:5]) if repo.topics else "none"
+            description = (repo.description or "no description")[:500]
+            
+            prompt += f"""
+{i}. ID: {repo.id}
+   Name: {repo.name}
+   Description: {description}
+   Topics: [{topics_str}]
+   Language: {repo.language or "unknown"}
+   Stars: {repo.stars}
+"""
+        
+        prompt += f"""
+Return JSON object with classifications array for all {len(repo_batch)} repositories:
+{{
+    "classifications": [
+        // {len(repo_batch)} classification objects here
+    ]
+}}"""
         return prompt
     
     @retry(
@@ -134,10 +154,6 @@ Repositories to classify:
     async def _call_llm(self, prompt: str) -> Dict[str, Any]:
         """Make API call to Azure OpenAI with retry logic"""
         try:
-            print(f"🔄 Making LLM API call with model: {self.model}")
-            print(f"🔄 API Version: {self.client._api_version}")
-            print(f"🔄 Endpoint: {self.client._azure_endpoint}")
-            
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -153,7 +169,6 @@ Repositories to classify:
             )
             
             content = response.choices[0].message.content
-            print(f"✅ LLM API call successful, response length: {len(content)}")
             parsed_response = json.loads(content)
             return parsed_response
             
