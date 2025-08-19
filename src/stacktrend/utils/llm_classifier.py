@@ -61,28 +61,53 @@ class LLMRepositoryClassifier:
         prompt = f"""You are an expert software engineer analyzing GitHub repositories. Classify these {len(repo_batch)} repositories into technology categories based on their PRIMARY purpose and functionality.
 
 PRIMARY CATEGORIES (choose exactly one):
-- AI: Artificial Intelligence, neural networks, LLMs, generative AI, computer vision, NLP
-- ML: Machine Learning, model training, MLOps, data science, statistical learning
-- DataEngineering: ETL, data pipelines, stream processing, data orchestration, analytics engineering  
-- Database: SQL/NoSQL databases, vector stores, caching, data storage systems
-- WebDev: Web frameworks, frontend/backend development, mobile apps, APIs
-- DevOps: Infrastructure, CI/CD, containerization, monitoring, deployment tools
-- Other: Programming languages, general utilities, gaming, system tools
+- AI: Large Language Models, Generative AI, Agentic AI, MCP Servers, Autonomous Agents, AI Infrastructure
+- ML: Machine Learning, Deep Learning, MLOps, Data Science, Computer Vision, NLP, Statistical Models
+- DataEngineering: Data Pipelines, ETL/ELT, Streaming, DataOps, Data Mesh, Analytics Engineering, Data Quality
+- Databases: SQL/NoSQL databases, Vector Stores, Time Series DBs, Graph Databases, Distributed Systems, Caching
+- WebDevelopment: Frontend/Backend, Mobile Apps, APIs, Web Frameworks, Serverless, JAMstack, Progressive Web Apps
+- DevOps: CI/CD, Infrastructure as Code, Containerization, Monitoring, GitOps, Cloud Engineering
+- CloudServices: Cloud Provider Tools, Serverless Platforms, SaaS SDKs, IaaS/PaaS Tools, Multi-Cloud
+- Security: Cybersecurity, DevSecOps, Identity Management, Threat Detection, Cryptography, Zero Trust
+- ProgrammingLanguages: Language Implementations, Compilers, Interpreters, Language Servers, Build Systems
+- Other: General utilities, gaming, system tools, educational content, miscellaneous
 
 SUBCATEGORY GUIDELINES:
-- AI: generative_ai, computer_vision, nlp, llm_tools, ai_agents, neural_networks
-- ML: deep_learning, machine_learning, mlops, data_science, model_serving
-- DataEngineering: etl, streaming, orchestration, analytics_engineering, data_quality
-- Database: relational, nosql, vector_db, caching, time_series, graph_db
-- WebDev: frontend, backend, fullstack, mobile, api, web_framework
-- DevOps: containerization, ci_cd, monitoring, infrastructure, security, cloud
+- AI: generative_ai, llm_tools, agentic_ai, mcp_servers, autonomous_agents, ai_infrastructure, reinforcement_learning
+- ML: deep_learning, machine_learning, mlops, data_science, model_serving, computer_vision, nlp, statistical_models
+- DataEngineering: etl, streaming, orchestration, dataops, data_mesh, analytics_engineering, data_quality, real_time_processing
+- Databases: relational, nosql, vector_db, time_series, graph_db, distributed_db, caching, in_memory
+- WebDevelopment: frontend, backend, fullstack, mobile, api, web_framework, serverless, jamstack, pwa
+- DevOps: containerization, ci_cd, monitoring, infrastructure_as_code, gitops, cloud_engineering, observability
+- CloudServices: aws_tools, azure_tools, gcp_tools, multi_cloud, serverless_platforms, saas_tools, paas_tools
+- Security: cybersecurity, devsecops, identity_management, threat_detection, cryptography, zero_trust, compliance
+- ProgrammingLanguages: language_implementation, compilers, interpreters, language_servers, build_tools, package_managers
+- Other: utilities, gaming, system_tools, educational, documentation, testing_tools
 
-CLASSIFICATION RULES:
-1. Analyze the repository NAME, DESCRIPTION, and TOPICS to understand its main purpose
-2. Choose the category that represents the PRIMARY use case, not just the programming language
-3. Be decisive - avoid "Other" unless truly unclear
-4. Confidence: 0.9+ for clear cases, 0.7+ for reasonable certainty, 0.5+ for educated guesses
-5. Look for key technology indicators in the name/description
+ENHANCED CLASSIFICATION RULES:
+1. Analyze repository NAME, DESCRIPTION, TOPICS, and PRIMARY LANGUAGE to understand core purpose
+2. Prioritize the MAIN functionality over supporting technologies (e.g., a web app using ML is WebDevelopment, not ML)
+3. Consider modern patterns: AI-first applications, cloud-native architectures, serverless designs
+4. Key indicators to look for:
+   - AI/ML: model training, inference, transformers, neural networks, AI agents
+   - DataEngineering: pipeline, ETL, streaming, kafka, airflow, spark, data lake
+   - Security: auth, encryption, security scanning, vulnerability, penetration testing
+   - CloudServices: AWS/Azure/GCP in name, terraform, kubernetes operators for cloud
+5. Confidence scoring:
+   - 0.9+: Clear technology stack and purpose evident
+   - 0.8+: Strong indicators with minor ambiguity
+   - 0.7+: Reasonable certainty based on available information
+   - 0.6+: Educated guess with limited information
+6. Avoid "Other" unless truly unclear or doesn't fit established patterns
+
+MODERN TECHNOLOGY INDICATORS:
+- Vector databases, embeddings → Databases (vector_db)
+- LLM applications, RAG systems → AI (llm_tools)
+- Data mesh, DataOps → DataEngineering (data_mesh, dataops)
+- GitOps, ArgoCD → DevOps (gitops)
+- JAMstack, Edge computing → WebDevelopment (jamstack)
+- Zero Trust, SIEM → Security (zero_trust, threat_detection)
+- MCP protocol implementations, Model Context Protocol → AI (mcp_servers)
 
 Return ONLY a valid JSON object with a "classifications" array:
 {{
@@ -90,35 +115,16 @@ Return ONLY a valid JSON object with a "classifications" array:
         {{
             "repo_id": "{repo_batch[0].id}",
             "primary_category": "AI",
-            "subcategory": "agentic", 
-            "confidence": 0.95
+            "subcategory": "llm_tools", 
+            "confidence": 0.95,
+            "reasoning": "Repository implements RAG system with vector embeddings"
         }}
     ]
 }}
 
 Repositories to classify:
 """
-        
-        for i, repo in enumerate(repo_batch, 1):
-            topics_str = ", ".join(repo.topics[:5]) if repo.topics else "none"
-            description = (repo.description or "no description")[:200]
-            
-            prompt += f"""
-{i}. ID: {repo.id}
-   Name: {repo.name}
-   Description: {description}
-   Topics: [{topics_str}]
-   Language: {repo.language or "unknown"}
-   Stars: {repo.stars}
-"""
-        
-        prompt += f"""
-Return JSON object with classifications array for all {len(repo_batch)} repositories:
-{{
-    "classifications": [
-        // {len(repo_batch)} classification objects here
-    ]
-}}"""
+
         return prompt
     
     @retry(
