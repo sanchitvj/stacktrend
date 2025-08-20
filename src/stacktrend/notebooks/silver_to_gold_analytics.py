@@ -603,8 +603,8 @@ except Exception as e:
 adoption_matrix_df = (silver_df
     .select("technology_category", "technology_subcategory", "topics_standardized", "stargazers_count")
     .filter(F.col("topics_standardized").isNotNull())
-    .withColumn("topic_array", F.split(F.col("topics_standardized"), ","))
-    .select("technology_category", "stargazers_count", F.explode("topic_array").alias("topic"))
+    .filter(F.size(F.col("topics_standardized")) > 0)  # Ensure array is not empty
+    .select("technology_category", "stargazers_count", F.explode("topics_standardized").alias("topic"))
     .filter(F.col("topic") != F.col("technology_category"))  # Exclude self-references
     .groupBy("technology_category", "topic")
     .agg(
