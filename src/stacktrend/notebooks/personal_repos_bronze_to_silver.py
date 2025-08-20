@@ -19,9 +19,10 @@ from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
 from pyspark.sql.types import StringType, DoubleType
 from datetime import datetime, timedelta
-import sys
-import subprocess
-import os
+import json
+import requests
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional
 
 # Initialize Spark Session
 spark = SparkSession.builder.appName("Personal_Repos_Bronze_to_Silver").getOrCreate()
@@ -89,111 +90,169 @@ LOOKBACK_DAYS = 30  # For velocity calculations
 # MAGIC ## LLM-Based Repository Classification System
 
 # COMMAND ----------
-def ensure_stacktrend_imports():
-    """
-    Install and import stacktrend package strictly inside a function to satisfy linters.
-    Note: Dynamic imports are necessary here as packages don't exist until installed.
-    """
-    # First try to import - maybe it's already installed
-    try:
-        from stacktrend.utils.llm_classifier import (
-            LLMRepositoryClassifier as _LLMRepositoryClassifier,
-            create_repository_data_from_dict as _create_repository_data_from_dict,
-        )
-        from stacktrend.config.settings import settings as _settings
-        print("Stacktrend package already available")
-        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
-    except ImportError:
-        print("Stacktrend package not found, installing...")
-    
-    try:
-        # Try different installation approaches
-        github_read_token = os.environ.get("GITHUB_READ_TOKEN")
-        
-        if github_read_token:
-            # Install from GitHub with authentication
-            install_url = f"https://{github_read_token}@github.com/sanchitvj/stacktrend.git"
-            result = subprocess.run([
-                sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", f"git+{install_url}"
-            ], timeout=120, capture_output=True, text=True)
-        else:
-            # Try public install
-            result = subprocess.run([
-                sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", "git+https://github.com/sanchitvj/stacktrend.git"
-            ], timeout=120, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            print(f"Git install failed with exit code {result.returncode}")
-            if result.stderr:
-                print(f"Install error: {result.stderr[:500]}")
-            
-            # Fallback to local install
-            print("Falling back to local package installation...")
-            result = subprocess.run([sys.executable, "-m", "pip", "install", "-e", "."], timeout=60, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                raise Exception(f"Local install also failed: {result.stderr}")
-        
-        print("Package installation successful, attempting import...")
-        
-        # Clear any cached modules to ensure fresh import
-        modules_to_clear = [k for k in sys.modules.keys() if k.startswith('stacktrend')]
-        for module in modules_to_clear:
-            del sys.modules[module]
-        
-        # Import after installation
-        from stacktrend.utils.llm_classifier import (
-            LLMRepositoryClassifier as _LLMRepositoryClassifier,
-            create_repository_data_from_dict as _create_repository_data_from_dict,
-        )
-        from stacktrend.config.settings import settings as _settings
-        
-        print("✅ Successfully imported stacktrend modules")
-        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
-        
-    except ImportError as import_error:
-        print(f"Import error after installation: {import_error}")
-        
-        try:
-            print("Attempting complete dependency reset...")
-            
-            # Force complete dependency reset
-            result = subprocess.run([
-                sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", 
-                "pydantic==2.8.2", "openai==1.35.15", "nest_asyncio"
-            ], timeout=120, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                print(f"Complete reset failed with exit code {result.returncode}")
-                if result.stderr:
-                    print(f"Reset error: {result.stderr[:200]}")
-                raise Exception("Complete dependency reset failed")
-            else:
-                print("Complete dependency reset successful")
-            
-            # Try import again
-            from stacktrend.utils.llm_classifier import (
-                LLMRepositoryClassifier as _LLMRepositoryClassifier,
-                create_repository_data_from_dict as _create_repository_data_from_dict,
-            )
-            from stacktrend.config.settings import settings as _settings
-            print("Successfully imported after force reinstall")
-            return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
-            
-        except Exception as retry_error:
-            print(f"ERROR: Force reinstall also failed: {retry_error}")
-            raise ImportError(f"Cannot import stacktrend modules due to dependency conflicts: {import_error}")
+# Simple inline LLM classifier - no external dependencies needed!
 
-    except Exception as e:
-        print(f"ERROR: CRITICAL: Failed to install stacktrend package: {e}")
-        print("LLM classification is MANDATORY and cannot proceed without it")
-        raise Exception(f"LLM classification setup failed: {e}")
+@dataclass  
+class RepositoryData:
+    """Repository data structure for LLM classification."""
+    id: int
+    name: str
+    description: Optional[str] 
+    topics: List[str]
+    language: Optional[str]
+    stars: int
+
+def create_repository_data_from_dict(repo_dict: dict) -> RepositoryData:
+    """Convert dictionary to RepositoryData object."""
+    return RepositoryData(
+        id=repo_dict.get('repository_id', 0),
+        name=repo_dict.get('name', ''),
+        description=repo_dict.get('description'),
+        topics=repo_dict.get('topics', []) if repo_dict.get('topics') else [],
+        language=repo_dict.get('language'), 
+        stars=repo_dict.get('stars', 0)
+    )
+
+class SimpleLLMClassifier:
+    """Simple LLM classifier without complex dependencies."""
+    
+    def __init__(self, api_key: str, endpoint: str, api_version: str, model: str):
+        self.api_key = api_key
+        self.endpoint = endpoint.rstrip('/')
+        self.api_version = api_version
+        self.model = model
+        
+    def classify_repositories(self, repositories: List[RepositoryData]) -> List[Dict[str, Any]]:
+        """Classify repositories using Azure OpenAI."""
+        batch_size = 5  # Process in small batches
+        all_results = []
+        
+        for i in range(0, len(repositories), batch_size):
+            batch = repositories[i:i + batch_size]
+            
+            try:
+                prompt = self._create_prompt(batch)
+                response = self._call_openai_api(prompt)
+                classifications = self._parse_response(response, batch)
+                all_results.extend(classifications)
+                print("Classified batch {}: {} repositories".format(i//batch_size + 1, len(classifications)))
+                
+            except Exception as e:
+                print("Failed to classify batch {}: {}".format(i//batch_size + 1, str(e)))
+                # Add fallback classifications
+                for repo in batch:
+                    all_results.append({
+                        'repository_id': repo.id,
+                        'technology_category': 'Other', 
+                        'technology_subcategory': 'unknown',
+                        'confidence_score': 0.1
+                    })
+        
+        return all_results
+    
+    def _create_prompt(self, repo_batch: List[RepositoryData]) -> str:
+        """Create classification prompt for repository batch."""
+        prompt = """You are a technology classification expert. Classify GitHub repositories into technology categories.
+
+Categories and subcategories:
+- AI: artificial-intelligence, machine-learning, deep-learning, neural-networks
+- DataEngineering: data-pipeline, etl, data-processing, big-data
+- WebDev: frontend, backend, full-stack, web-framework
+- Database: relational, nosql, data-storage, orm
+- DevOps: containerization, infrastructure, deployment, monitoring
+- Other: everything else
+
+For each repository, analyze the name, description, topics, and language to determine the best category.
+
+Repositories to classify:
+"""
+        
+        for i, repo in enumerate(repo_batch, 1):
+            topics_str = ", ".join(repo.topics[:5]) if repo.topics else "none"
+            description = (repo.description or "no description")[:200]
+            
+            prompt += """
+{}. ID: {}
+   Name: {}
+   Description: {}
+   Topics: [{}]
+   Language: {}
+   Stars: {}
+""".format(i, repo.id, repo.name, description, topics_str, repo.language or "unknown", repo.stars)
+        
+        prompt += """
+Return JSON object with classifications array for all {} repositories:
+{{
+    "classifications": [
+        {{"repository_id": 123, "technology_category": "AI", "technology_subcategory": "machine-learning", "confidence_score": 0.95}}
+    ]
+}}""".format(len(repo_batch))
+        return prompt
+    
+    def _call_openai_api(self, prompt: str) -> str:
+        """Call Azure OpenAI API directly."""
+        url = "{}/openai/deployments/{}/chat/completions?api-version={}".format(
+            self.endpoint, self.model, self.api_version
+        )
+        
+        headers = {
+            "api-key": self.api_key,
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "messages": [
+                {"role": "system", "content": "You are a technology classification expert."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 2000,
+            "temperature": 0.1
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        
+        result = response.json()
+        return result['choices'][0]['message']['content']
+    
+    def _parse_response(self, response: str, batch: List[RepositoryData]) -> List[Dict[str, Any]]:
+        """Parse LLM response into classification results."""
+        try:
+            parsed = json.loads(response)
+            classifications = parsed.get('classifications', [])
+            
+            # Validate we got classifications for all repos
+            if len(classifications) != len(batch):
+                print("Warning: Expected {} classifications, got {}".format(len(batch), len(classifications)))
+            
+            # Ensure all repos have classifications
+            classified_ids = {c.get('repository_id') for c in classifications}
+            for repo in batch:
+                if repo.id not in classified_ids:
+                    classifications.append({
+                        'repository_id': repo.id,
+                        'technology_category': 'Other',
+                        'technology_subcategory': 'unknown', 
+                        'confidence_score': 0.1
+                    })
+            
+            return classifications
+            
+        except json.JSONDecodeError:
+            print("Failed to parse LLM response as JSON: {}...".format(response[:200]))
+            # Return fallback classifications
+            return [{
+                'repository_id': repo.id,
+                'technology_category': 'Other',
+                'technology_subcategory': 'unknown',
+                'confidence_score': 0.1
+            } for repo in batch]
 
 def classify_repositories_with_llm(repositories_df):
     """
     Smart LLM classification - only classify repos that need it (not already well-classified)
     """
-    LLMRepositoryClassifier, create_repository_data_from_dict, settings = ensure_stacktrend_imports()
+    # Use simple inline classifier instead of complex imports
     
     try:
         # Check existing Silver data to avoid re-classifying well-classified repos
@@ -254,9 +313,9 @@ def classify_repositories_with_llm(repositories_df):
         
         print(f"Classifying {len(repo_data_list)} repositories...")
         
-        # Initialize LLM classifier
+        # Initialize simple LLM classifier
         try:
-            classifier = LLMRepositoryClassifier(
+            classifier = SimpleLLMClassifier(
                 api_key=azure_openai_api_key,
                 endpoint=azure_openai_endpoint,
                 api_version=azure_openai_api_version,
