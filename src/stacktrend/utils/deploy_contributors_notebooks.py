@@ -124,22 +124,49 @@ class FabricContributorsNotebookDeployer:
             response = requests.post(url, headers=headers, json=payload)
             response.raise_for_status()
             
-            # Better response handling
-            try:
-                data = response.json()
-                if data is None:
-                    print("❌ API returned null response")
-                    print("Response status: {}".format(response.status_code))
-                    print("Response text: {}".format(response.text[:500]))
-                    return None
+            # Handle Fabric API async response pattern
+            if response.status_code == 202:
+                # 202 Accepted - request is being processed asynchronously
+                print("✅ Notebook creation accepted (async processing)")
                 
-                notebook_id = data.get("id") if isinstance(data, dict) else None
-                if notebook_id:
-                    print("✅ Created notebook: {}".format(name))
-                    return notebook_id
+                # Wait for processing and then find the notebook by name
+                print("Waiting for notebook creation to complete...")
+                time.sleep(10)  # Give Fabric time to process
+                
+                # Try to find the newly created notebook
+                for attempt in range(5):  # Try 5 times with increasing delay
+                    notebook_id = self.find_notebook_by_name(name)
+                    if notebook_id:
+                        print("✅ Created notebook: {}".format(name))
+                        return notebook_id
+                    
+                    print("Waiting for notebook to appear (attempt {}/5)...".format(attempt + 1))
+                    time.sleep(5 * (attempt + 1))  # Exponential backoff
+                
+                print("❌ Notebook creation timed out - notebook may still be processing")
+                return None
+                
+            # Handle immediate response (status 200/201)
+            try:
+                data = response.json() if response.text.strip() else {}
+                
+                if response.status_code in [200, 201]:
+                    notebook_id = data.get("id") if isinstance(data, dict) else None
+                    if notebook_id:
+                        print("✅ Created notebook: {}".format(name))
+                        return notebook_id
+                    else:
+                        # Try to find by name as fallback
+                        time.sleep(3)
+                        notebook_id = self.find_notebook_by_name(name)
+                        if notebook_id:
+                            print("✅ Created notebook: {} (found by name)".format(name))
+                            return notebook_id
+                        else:
+                            print("❌ No notebook ID found after creation")
+                            return None
                 else:
-                    print("❌ No notebook ID in response")
-                    print("Response data: {}".format(str(data)[:500]))
+                    print("❌ Unexpected status code: {}".format(response.status_code))
                     return None
                     
             except ValueError as json_error:
@@ -183,13 +210,24 @@ class FabricContributorsNotebookDeployer:
         try:
             response = requests.post(url, headers=headers, json=payload)
             response.raise_for_status()
-            print(f"✅ Updated notebook: {notebook_id}")
-            return True
+            
+            # Handle async response for updates too
+            if response.status_code == 202:
+                print("✅ Notebook update accepted (async processing)")
+                time.sleep(5)  # Give time for processing
+                return True
+            elif response.status_code in [200, 201]:
+                print("✅ Updated notebook: {}".format(notebook_id))
+                return True
+            else:
+                print("❌ Unexpected update response: {}".format(response.status_code))
+                return False
             
         except requests.exceptions.RequestException as e:
-            print(f"❌ Failed to update notebook {notebook_id}: {e}")
+            print("❌ Failed to update notebook {}: {}".format(notebook_id, e))
             if hasattr(e, 'response') and e.response is not None:
-                print(f"Response: {e.response.text}")
+                print("Response status: {}".format(e.response.status_code))
+                print("Response text: {}".format(e.response.text[:500]))
             return False
     
     def get_notebook_content(self, notebook_id: str) -> Optional[str]:
@@ -261,64 +299,110 @@ class FabricContributorsNotebookDeployer:
             return True  # If error, assume changed
 
     def deploy_notebook(self, file_path: str, notebook_name: str) -> bool:
-        """Deploy a single notebook only if it has changed"""
+        """Deploy a single notebook with robust async handling"""
         if not os.path.exists(file_path):
-            print(f"File not found: {file_path}")
+            print("File not found: {}".format(file_path))
+            return False
+        
+        # Read file content once
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception as e:
+            print("❌ Error reading file {}: {}".format(file_path, e))
             return False
         
         # Check if notebook exists
         notebook_id = self.find_notebook_by_name(notebook_name)
         
         if notebook_id:
-            # Check if content has actually changed
-            if not self.has_notebook_changed(file_path, notebook_id):
-                print("Skipping {} - no changes detected".format(notebook_name))
-                return True
+            # Notebook exists - update it
+            print("Updating existing notebook: {}".format(notebook_name))
             
-            print("Updating {} -> {} (changes detected)".format(file_path, notebook_name))
-            
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            # Check if content has actually changed (optional - skip for reliability)
+            try:
+                if not self.has_notebook_changed(file_path, notebook_id):
+                    print("Skipping {} - no changes detected".format(notebook_name))
+                    return True
+            except Exception as e:
+                print("⚠️ Could not compare content, proceeding with update: {}".format(e))
             
             # Update existing notebook
             return self.update_notebook(notebook_id, content)
         else:
-            print("Creating {} -> {}".format(file_path, notebook_name))
+            # Notebook doesn't exist - create new one
+            print("Creating new notebook: {}".format(notebook_name))
             
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            # Create new notebook with async handling
+            success = self.create_notebook_with_verification(notebook_name, content)
+            return success
+    
+    def create_notebook_with_verification(self, name: str, content: str) -> bool:
+        """Create notebook and verify it was actually created"""
+        # Try to create the notebook
+        result = self.create_notebook(name, content)
+        
+        # If create_notebook returns None (async case), verify by finding the notebook
+        if result is None:
+            print("Verifying notebook creation...")
+            time.sleep(5)  # Additional wait time
             
-            # Create new notebook
-            new_id = self.create_notebook(notebook_name, content)
-            return new_id is not None
+            # Try to find the notebook to confirm it was created
+            for attempt in range(3):
+                notebook_id = self.find_notebook_by_name(name)
+                if notebook_id:
+                    print("✅ Verified notebook created: {}".format(name))
+                    return True
+                
+                print("Verification attempt {}/3 - waiting...".format(attempt + 1))
+                time.sleep(10)
+            
+            print("❌ Could not verify notebook creation: {}".format(name))
+            return False
+        
+        # If create_notebook returned a valid ID, we're good
+        return result is not None
     
     def deploy_all(self) -> bool:
-        """Deploy all contributors notebooks"""
-        print("Starting Contributors Fabric notebook deployment...")
+        """Deploy all personal repos notebooks with async handling"""
+        print("Starting Personal Repos Fabric notebook deployment...")
         
         success_count = 0
         total_count = len(self.notebook_mapping)
         
-        for file_path, notebook_name in self.notebook_mapping.items():
+        for i, (file_path, notebook_name) in enumerate(self.notebook_mapping.items()):
+            print("\n--- Deploying notebook {}/{} ---".format(i + 1, total_count))
+            print("File: {}".format(file_path))
+            print("Name: {}".format(notebook_name))
+            
             try:
                 if self.deploy_notebook(file_path, notebook_name):
                     success_count += 1
-                    time.sleep(2)  # Rate limiting
+                    print("✅ Successfully deployed: {}".format(notebook_name))
                 else:
-                    print(f"Failed to deploy {file_path}")
+                    print("❌ Failed to deploy: {}".format(notebook_name))
+                
+                # Longer wait between deployments for async processing
+                if i < total_count - 1:  # Don't wait after last one
+                    print("Waiting before next deployment...")
+                    time.sleep(15)
+                    
             except Exception as e:
-                print(f"Error deploying {file_path}: {str(e)}")
+                print("❌ Exception deploying {}: {}".format(notebook_name, str(e)))
         
-        print("\nContributors Deployment Summary:")
-        print(f"Successfully deployed: {success_count}/{total_count} notebooks")
+        print("\n" + "="*50)
+        print("Personal Repos Deployment Summary:")
+        print("Successfully deployed: {}/{} notebooks".format(success_count, total_count))
         
         if success_count == total_count:
-            print("✅ All contributors notebooks deployed successfully!")
+            print("✅ All personal repos notebooks deployed successfully!")
             return True
+        elif success_count > 0:
+            print("⚠️ Partial deployment success - {} notebooks deployed".format(success_count))
+            print("Note: Some notebooks may still be processing asynchronously")
+            return False
         else:
-            print("⚠️ Some contributors notebooks failed to deploy")
+            print("❌ No notebooks were deployed successfully")
             return False
 
 def main():
@@ -330,7 +414,7 @@ def main():
             sys.exit(1)
             
     except Exception as e:
-        print(f"❌ Contributors deployment failed: {str(e)}")
+        print("❌ Personal repos deployment failed: {}".format(str(e)))
         sys.exit(1)
 
 if __name__ == "__main__":

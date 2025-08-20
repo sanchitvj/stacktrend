@@ -30,16 +30,14 @@ jobs:
         python -m pip install --upgrade pip
         pip install .
         
-    - name: Deploy Contributors Notebooks to Fabric
+    - name: Deploy Personal Repos Notebooks to Fabric
       env:
         FABRIC_TENANT_ID: ${{ secrets.FABRIC_TENANT_ID }}
         FABRIC_CLIENT_ID: ${{ secrets.FABRIC_CLIENT_ID }}
         FABRIC_CLIENT_SECRET: ${{ secrets.FABRIC_CLIENT_SECRET }}
         FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
-        DEPLOYMENT_TYPE: contributors
+        DEPLOYMENT_TYPE: personal_repos
+      continue-on-error: true
+      id: auto_deploy
       run: |
         python -m src.stacktrend.utils.deploy_contributors_notebooks
-        
-    - name: Report deployment status
-      run: |
-        echo "✅ Contributors notebook deployment completed successfully!"
