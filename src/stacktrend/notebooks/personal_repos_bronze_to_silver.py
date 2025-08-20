@@ -20,7 +20,6 @@ import pyspark.sql.functions as F
 from pyspark.sql.types import StringType, DoubleType
 from datetime import datetime, timedelta
 import os
-import sys
 
 # Initialize Spark Session
 spark = SparkSession.builder.appName("Personal_Repos_Bronze_to_Silver").getOrCreate()
@@ -35,18 +34,18 @@ try:
     
     # Mount Bronze lakehouse using lakehouse name (Fabric resolves the ID securely)
     bronze_mount = "/mnt/bronze"
-    bronze_abfs = f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/stacktrend_bronze_lh.Lakehouse"
+    bronze_abfs = "abfss://{}@onelake.dfs.fabric.microsoft.com/stacktrend_bronze_lh.Lakehouse".format(workspace_id)
     
     # Check if already mounted
     existing_mounts = [mount.mountPoint for mount in mssparkutils.fs.mounts()]
     if bronze_mount not in existing_mounts:
         mssparkutils.fs.mount(bronze_abfs, bronze_mount)
-        print(f"Mounted Bronze lakehouse at {bronze_mount}")
+        print("Mounted Bronze lakehouse at {}".format(bronze_mount))
     else:
-        print(f"Bronze lakehouse already mounted at {bronze_mount}")
+        print("Bronze lakehouse already mounted at {}".format(bronze_mount))
         
 except Exception as e:
-    print(f"WARNING: Mount failed, will use cross-lakehouse table references: {e}")
+    print("WARNING: Mount failed, will use cross-lakehouse table references: {}".format(e))
 
 # COMMAND ----------
 # PARAMETERS CELL: Define parameters that Data Factory will pass
@@ -74,9 +73,9 @@ if not azure_openai_endpoint or azure_openai_endpoint == "":
     raise ValueError("Azure OpenAI endpoint is required for LLM classification")
 
 print("✅ Azure OpenAI credentials configured")
-print(f"   Endpoint: {azure_openai_endpoint}")
-print(f"   Model: {azure_openai_model}")
-print(f"   API Version: {azure_openai_api_version}")
+print("   Endpoint: {}".format(azure_openai_endpoint))
+print("   Model: {}".format(azure_openai_model))
+print("   API Version: {}".format(azure_openai_api_version))
 
 # Set environment variables for the LLM classifier (exactly like original)
 os.environ['AZURE_OPENAI_API_KEY'] = azure_openai_api_key
@@ -94,249 +93,117 @@ LOOKBACK_DAYS = 30  # For velocity calculations
 # MAGIC ## LLM-Based Repository Classification System
 
 # COMMAND ----------
-# EXACT copy of original working notebook's LLM setup
-def ensure_stacktrend_imports():
+# ZERO-DEPENDENCY LLM Classification
+# Use only what's built into Fabric - no external package installations
+
+def fabric_native_llm_classifier():
     """
-    Install and import stacktrend package strictly inside a function to satisfy linters.
-    Note: Dynamic imports are necessary here as packages don't exist until installed.
+    Pure Fabric-native LLM classification using only built-in libraries.
+    Avoids ALL dependency conflicts and installation timeouts.
     """
-    import os
+    import urllib.request
+    import urllib.parse
+    import json
     
-    # First try to import - maybe it's already installed
-    try:
-        from stacktrend.utils.llm_classifier import (
-            LLMRepositoryClassifier as _LLMRepositoryClassifier,
-            create_repository_data_from_dict as _create_repository_data_from_dict,
+    def classify_repo_batch(repo_data_list, api_key, endpoint, model="o4-mini"):
+        """Call Azure OpenAI directly using urllib (no external dependencies)."""
+        
+        # Create the prompt exactly like the original
+        prompt = """You are an expert at classifying GitHub repositories into technology categories.
+
+Classify each repository into ONE primary category and subcategory based on the repository name, description, topics, and primary language.
+
+Categories:
+- AI: artificial-intelligence, machine-learning, deep-learning, neural-networks, llm, nlp
+- ML: machine-learning, scikit-learn, tensorflow, pytorch, data-science, statistics  
+- DataEngineering: data-pipeline, etl, data-processing, apache-spark, airflow, kafka
+- Database: database, sql, nosql, postgresql, mongodb, redis, orm
+- WebDev: web-development, frontend, backend, react, vue, angular, nodejs, express
+- DevOps: devops, docker, kubernetes, ci-cd, infrastructure, monitoring, deployment
+- Other: everything else that doesn't clearly fit above categories
+
+For each repository, return:
+- repo_id: the repository ID
+- primary_category: one of the categories above
+- subcategory: specific technology or subcategory
+- confidence: float between 0.0 and 1.0
+
+Repositories to classify:
+"""
+        
+        for i, repo in enumerate(repo_data_list, 1):
+            topics_str = ", ".join(repo.get('topics', [])[:5]) if repo.get('topics') else "none"
+            description = (repo.get('description', '') or "no description")[:200]
+            
+            prompt += """
+{}. ID: {}
+   Name: {}
+   Description: {}
+   Topics: [{}]
+   Language: {}
+   Stars: {}
+""".format(
+                i, repo['repository_id'], repo['name'], 
+                description, topics_str, 
+                repo.get('language', 'unknown'), repo.get('stargazers_count', 0)
+            )
+        
+        prompt += """
+Return JSON object with classifications array for all {} repositories:
+{{
+    "classifications": [
+        {{"repo_id": 123, "primary_category": "AI", "subcategory": "machine-learning", "confidence": 0.95}}
+    ]
+}}""".format(len(repo_data_list))
+        
+        # Make HTTP request to Azure OpenAI
+        url = "{}/openai/deployments/{}/chat/completions?api-version=2025-01-01-preview".format(
+            endpoint.rstrip('/'), model
         )
-        from stacktrend.config.settings import settings as _settings
-        print("Stacktrend package already available")
-        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
-    except ImportError:
-        print("Stacktrend package not found, installing...")
-    
-    try:
-        # Try different installation approaches
-        github_read_token = os.environ.get("GITHUB_READ_TOKEN")
-        repo_ref = os.environ.get("STACKTREND_GIT_REF", "dev")
         
-        install_attempts = []
+        headers = {
+            "api-key": api_key,
+            "Content-Type": "application/json"
+        }
         
-        # Attempt 1: Direct ZIP download (avoids git operations completely)
-        install_attempts.append(f"https://github.com/sanchitvj/stacktrend/archive/{repo_ref}.zip")
-        install_attempts.append("https://github.com/sanchitvj/stacktrend/archive/main.zip")
+        payload = {
+            "messages": [
+                {"role": "system", "content": "You are a technology classification expert. Always respond with valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 2000,
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"}
+        }
         
-        # Attempt 2: Use pip programmatically instead of subprocess
+        # Use urllib.request for HTTP call (built into Python)
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(payload).encode('utf-8'),
+            headers=headers,
+            method='POST'
+        )
+        
         try:
-            import pip
-            print("Trying pip programmatic installation...")
-            for url in install_attempts[:2]:  # Only try ZIP downloads first
-                try:
-                    print(f"Installing from {url}")
-                    # Use pip's internal API - different approaches for different pip versions
-                    try:
-                        # Modern pip
-                        from pip._internal import main as pip_main
-                        pip_main(['install', '--upgrade', '--no-cache-dir', url])
-                    except ImportError:
-                        # Older pip
-                        pip.main(['install', '--upgrade', '--no-cache-dir', url])
-                    print("Pip programmatic installation succeeded")
-                    break
-                except Exception as pip_error:
-                    print(f"Pip programmatic install failed: {pip_error}")
-                    continue
-        except ImportError:
-            print("Pip module not available for programmatic use")
-            
-        # Attempt 2.5: Try using importlib and direct download
-        try:
-            import urllib.request
-            import tempfile
-            import zipfile
-            print("Trying direct download and install...")
-            
-            for url in install_attempts[:2]:  # ZIP URLs only
-                try:
-                    print(f"Downloading {url}")
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        zip_path = f"{temp_dir}/stacktrend.zip"
-                        urllib.request.urlretrieve(url, zip_path)
-                        
-                        # Extract zip
-                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                            zip_ref.extractall(temp_dir)
-                        
-                        # Find the extracted directory
-                        extracted_dirs = [d for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d))]
-                        if extracted_dirs:
-                            extracted_path = os.path.join(temp_dir, extracted_dirs[0])
-                            
-                            # Add to Python path
-                            if extracted_path not in sys.path:
-                                sys.path.insert(0, extracted_path)
-                            
-                            print("Direct download installation succeeded")
-                            break
-                except Exception as download_error:
-                    print(f"Direct download failed: {download_error}")
-                    continue
+            with urllib.request.urlopen(req, timeout=30) as response:
+                if response.status != 200:
+                    raise Exception("Azure OpenAI API error {}: {}".format(response.status, response.read().decode()))
+                
+                result = json.loads(response.read().decode())
+                content = result['choices'][0]['message']['content']
+                return json.loads(content)
+                
         except Exception as e:
-            print(f"Direct download approach failed: {e}")
-        
-        # Attempt 3: Git methods as last resort
-        if github_read_token:
-            install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@{repo_ref}")
-        install_attempts.append(f"git+https://github.com/sanchitvj/stacktrend.git@{repo_ref}")
-        
-        # Attempt 4: Main branch git fallback
-        if github_read_token:
-            install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@main")
-        install_attempts.append("git+https://github.com/sanchitvj/stacktrend.git@main")
-        
-        # First, upgrade critical dependencies with force reload
-        print("Upgrading critical dependencies with force reload...")
-        try:
-            import sys
-            import subprocess
-            
-            # Force uninstall and reinstall to avoid cached imports
-            subprocess.run([
-                sys.executable, "-m", "pip", "uninstall", "-y", 
-                "typing_extensions", "pydantic", "openai", "typing-inspection"
-            ], timeout=60, capture_output=True, text=True)
-            
-            print("Uninstalled old versions, installing new ones...")
-            result = subprocess.run([
-                sys.executable, "-m", "pip", "install", "--no-cache-dir",
-                "typing_extensions>=4.12.0", "pydantic>=2.8.0", "openai>=1.35.0", "nest_asyncio"
-            ], timeout=120, capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                print("Dependencies upgraded successfully")
-            else:
-                print(f"Dependency upgrade failed: {result.stderr}")
-                
-        except Exception as dep_error:
-            print(f"Dependency upgrade error: {dep_error}")
-        
-        # Now try each installation method
-        for i, install_url in enumerate(install_attempts, 1):
-            print(f"Installation attempt {i}: {install_url}")
-            
-            try:
-                import sys
-                import subprocess
-                
-                # Choose installation method based on URL type
-                if install_url.startswith('http') and install_url.endswith('.zip'):
-                    # ZIP download method
-                    cmd = [
-                        sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", 
-                        "--no-cache-dir", install_url
-                    ]
-                else:
-                    # Git method
-                    cmd = [
-                        sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", 
-                        "--no-cache-dir", install_url
-                    ]
-                
-                print(f"Running command: {' '.join(cmd)}")
-                
-                # Redirect stderr to devnull for git operations
-                with open(os.devnull, 'w') as devnull:
-                    result = subprocess.run(cmd, timeout=300, stdout=subprocess.PIPE, 
-                                          stderr=devnull if 'git+' in install_url else subprocess.PIPE, 
-                                          text=True)
-                
-                if result.returncode == 0:
-                    print(f"Installation successful from: {install_url}")
-                    break
-                else:
-                    print(f"Installation failed with exit code {result.returncode}")
-                    if result.stderr and 'git+' not in install_url:
-                        print(f"Error details: {result.stderr[:200]}")
-                    continue
-                    
-            except subprocess.TimeoutExpired:
-                print(f"Installation timeout for attempt {i}")
-                continue
-            except Exception as install_error:
-                print(f"Installation error for attempt {i}: {install_error}")
-                continue
-        else:
-            # All installation attempts failed, try force dependency reset
-            print("All installation attempts failed, trying complete dependency reset...")
-            try:
-                import sys
-                import subprocess
-                
-                # Uninstall everything first
-                subprocess.run([
-                    sys.executable, "-m", "pip", "uninstall", "-y", 
-                    "typing_extensions", "pydantic", "openai", "typing-inspection", "stacktrend"
-                ], timeout=60, capture_output=True, text=True)
-                
-                # Clear all related modules from memory
-                modules_to_clear = []
-                for module_name in list(sys.modules.keys()):
-                    if any(mod in module_name for mod in ['stacktrend', 'azure', 'openai', 'pydantic']):
-                        modules_to_clear.append(module_name)
-                
-                for module_name in modules_to_clear:
-                    try:
-                        del sys.modules[module_name]
-                    except KeyError:
-                        pass
-                
-                # Install with specific compatible versions
-                result = subprocess.run([
-                    sys.executable, "-m", "pip", "install", "--no-cache-dir",
-                    "typing_extensions==4.12.2", "pydantic==2.8.2", "openai==1.35.15", "nest_asyncio"
-                ], timeout=120, capture_output=True, text=True)
-                
-                if result.returncode != 0:
-                    print(f"Dependency reset failed: {result.stderr}")
-                    raise Exception("Complete dependency reset failed")
-                
-                print("Dependencies reset successful, trying git install...")
-                result = subprocess.run([
-                    sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall",
-                    "git+https://github.com/sanchitvj/stacktrend.git"
-                ], timeout=180, capture_output=True, text=True)
-                
-                if result.returncode != 0:
-                    raise Exception(f"Final git install failed: {result.stderr}")
-                    
-            except Exception as reset_error:
-                print(f"Complete dependency reset failed: {reset_error}")
-                raise Exception(f"Cannot install stacktrend package after all attempts: {reset_error}")
-        
-        # Clear any cached imports to ensure fresh import
-        modules_to_clear = [k for k in sys.modules.keys() if k.startswith('stacktrend')]
-        for module in modules_to_clear:
-            del sys.modules[module]
-        
-        # Import after installation
-        from stacktrend.utils.llm_classifier import (
-            LLMRepositoryClassifier as _LLMRepositoryClassifier,
-            create_repository_data_from_dict as _create_repository_data_from_dict,
-        )
-        from stacktrend.config.settings import settings as _settings
-        
-        print("✅ Successfully imported stacktrend modules")
-        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
-        
-    except Exception as e:
-        print(f"ERROR: CRITICAL: Failed to install stacktrend package: {e}")
-        print("LLM classification is MANDATORY and cannot proceed without it")
-        raise Exception(f"LLM classification setup failed: {e}")
+            raise Exception("Azure OpenAI API call failed: {}".format(str(e)))
+    
+    return classify_repo_batch
 
 def classify_repositories_with_llm(repositories_df):
     """
     Smart LLM classification - only classify repos that need it (not already well-classified)
     """
-    LLMRepositoryClassifier, create_repository_data_from_dict, settings = ensure_stacktrend_imports()
+    # Get the zero-dependency classifier
+    classify_repo_batch = fabric_native_llm_classifier()
     
     try:
         # Check existing Silver data to avoid re-classifying well-classified repos
@@ -364,12 +231,12 @@ def classify_repositories_with_llm(repositories_df):
             metrics_count = repos_for_metrics_only.count()
             
             print("Smart Classification Strategy:")
-            print(f"  Repos needing LLM classification: {llm_count}")
-            print(f"  Repos with metrics-only update: {metrics_count}")
-            print(f"  Cost savings: ~${(metrics_count * 0.00006):.3f} (skipped {metrics_count} LLM calls)")
+            print("  Repos needing LLM classification: {}".format(llm_count))
+            print("  Repos with metrics-only update: {}".format(metrics_count))
+            print("  Cost savings: ~${:.3f} (skipped {} LLM calls)".format(metrics_count * 0.00006, metrics_count))
             
         except Exception as e:
-            print(f"No existing Silver data found: {e}")
+            print("No existing Silver data found: {}".format(e))
             print("Will classify all repositories with LLM")
         
         # Only run LLM on repos that need it
@@ -384,44 +251,39 @@ def classify_repositories_with_llm(repositories_df):
         for row in repos_collected:
             # Convert PySpark Row to dict for safe access
             row_dict = row.asDict()
-            
-            repo_data = create_repository_data_from_dict({
-                'repository_id': row_dict['repository_id'],
-                'name': row_dict['name'],
-                'full_name': row_dict['full_name'],
-                'description': row_dict.get('description'),
-                'topics': row_dict.get('topics', []),
-                'language': row_dict.get('language'),
-                'stargazers_count': row_dict.get('stargazers_count', 0)
-            })
-            repo_data_list.append(repo_data)
+            repo_data_list.append(row_dict)  # Just use the dict directly
         
-        print(f"Running LLM classification on {repos_needing_llm.count()} repositories...")
+        print("Running LLM classification on {} repositories...".format(repos_needing_llm.count()))
         
-        # Initialize LLM classifier using environment variables directly (EXACT same as original)
+        # Use zero-dependency LLM classification (no external packages!)
         try:
-            classifier = LLMRepositoryClassifier(
-                api_key=os.environ.get('AZURE_OPENAI_API_KEY'),
-                endpoint=os.environ.get('AZURE_OPENAI_ENDPOINT'),
-                api_version=os.environ.get('AZURE_OPENAI_API_VERSION', '2025-01-01-preview'),
-                model=os.environ.get('AZURE_OPENAI_MODEL', 'o4-mini')
+            response_data = classify_repo_batch(
+                repo_data_list, 
+                azure_openai_api_key, 
+                azure_openai_endpoint, 
+                azure_openai_model
             )
+            
+            # Parse classifications from response
+            if isinstance(response_data, dict) and 'classifications' in response_data:
+                classifications = response_data['classifications']
+            elif isinstance(response_data, list):
+                classifications = response_data
+            else:
+                raise Exception("Unexpected response format from Azure OpenAI")
+                
         except Exception as e:
-            raise Exception(f"LLM Classifier initialization failed: {e}")
+            print("LLM classification failed: {}".format(str(e)))
+            raise Exception("Azure OpenAI API error: {}".format(str(e)))
         
-        # Classify repositories
-        try:
-            classifications = classifier.classify_repositories_sync(repo_data_list)
-        except Exception as e:
-            raise Exception(f"LLM classification failed: {e}")
-        
-        # Convert results back to Spark DataFrame format
+        # Convert results to classification map
         classification_map = {}
-        for c in classifications:
-            classification_map[c.repo_id] = {
-                'primary_category': c.primary_category,
-                'subcategory': c.subcategory,
-                'confidence': c.confidence
+        for classification in classifications:
+            repo_id = str(classification.get('repo_id', ''))
+            classification_map[repo_id] = {
+                'primary_category': classification.get('primary_category', 'Other'),
+                'subcategory': classification.get('subcategory', 'unknown'),
+                'confidence': float(classification.get('confidence', 0.1))
             }
         
         # Add classifications to original DataFrame
@@ -497,8 +359,8 @@ def classify_repositories_with_llm(repositories_df):
         return final_classified_df
         
     except Exception as e:
-        print(f"❌ Repository classification failed: {e}")
-        raise Exception(f"LLM classification is mandatory for Silver layer: {e}")
+        print("Repository classification failed: {}".format(e))
+        raise Exception("LLM classification failed: {}".format(e))
 
 # COMMAND ----------
 # MAGIC %md
@@ -517,8 +379,8 @@ try:
     print("Bronze Personal Repos Data: {} repositories".format(total_repos))
     
 except Exception as e:
-    print(f"❌ Error loading repository data: {e}")
-    raise Exception(f"Cannot proceed without Bronze repository data: {e}")
+    print("Error loading repository data: {}".format(e))
+    raise Exception("Cannot proceed without Bronze repository data: {}".format(e))
 
 # Read Activity data from Bronze layer
 try:
@@ -530,8 +392,8 @@ try:
     print("Bronze Activity Data: {} activities".format(total_activities))
     
 except Exception as e:
-    print(f"❌ Error loading activity data: {e}")
-    raise Exception(f"Cannot proceed without Bronze activity data: {e}")
+    print("Error loading activity data: {}".format(e))
+    raise Exception("Cannot proceed without Bronze activity data: {}".format(e))
 
 # COMMAND ----------
 # MAGIC %md
@@ -626,7 +488,7 @@ if repos_bronze_df is not None:
         "processed_timestamp", F.lit(datetime.now())
     )
     
-    print(f"✅ Personal repositories processed: {repos_final_df.count()} records")
+    print("Personal repositories processed: {} records".format(repos_final_df.count()))
     
 else:
     print("No repository data available for processing")
@@ -695,7 +557,7 @@ if activity_bronze_df is not None and repos_final_df is not None:
         for df in all_activity_metrics[1:]:
             activity_metrics_df = activity_metrics_df.union(df)
         
-        print(f"✅ Activity metrics calculated: {activity_metrics_df.count()} records")
+        print("Activity metrics calculated: {} records".format(activity_metrics_df.count()))
     else:
         activity_metrics_df = None
         
@@ -743,7 +605,7 @@ if repos_final_df is not None:
         try:
             existing_silver = spark.table("github_my_portfolio")
             existing_silver_count = existing_silver.count()
-            print(f"Found existing Silver portfolio table with {existing_silver_count} records")
+            print("Found existing Silver portfolio table with {} records".format(existing_silver_count))
         except Exception as e:
             table_exists = False
             print("Silver portfolio table doesn't exist - will create new table")
@@ -811,9 +673,9 @@ if repos_final_df is not None:
             updated_records = clean_records - max(0, new_records)
             
             print("Personal Portfolio Silver layer Delta merge completed:")
-            print(f"  Total records now: {final_silver_count}")
-            print(f"  New records added: {max(0, new_records)}")
-            print(f"  Records updated: {updated_records}")
+            print("  Total records now: {}".format(final_silver_count))
+            print("  New records added: {}".format(max(0, new_records)))
+            print("  Records updated: {}".format(updated_records))
             
         else:
             # First time or no data - use overwrite
@@ -825,12 +687,12 @@ if repos_final_df is not None:
                  .option("overwriteSchema", "true")
                  .partitionBy("partition_date", "technology_category")
                  .saveAsTable("github_my_portfolio"))
-                print(f"✅ Created new Silver portfolio table with {clean_records} records")
+                print("Created new Silver portfolio table with {} records".format(clean_records))
             else:
                 print("No clean portfolio records to save")
         
     except Exception as e:
-        print(f"❌ Error with Portfolio Silver Delta merge: {e}")
+        print("Error with Portfolio Silver Delta merge: {}".format(e))
         print("Falling back to overwrite mode...")
         try:
             (portfolio_silver_df
@@ -840,9 +702,9 @@ if repos_final_df is not None:
              .option("overwriteSchema", "true")
              .partitionBy("partition_date", "technology_category")
              .saveAsTable("github_my_portfolio"))
-            print(f"✅ Fallback successful: Saved {clean_records} records")
+            print("Fallback successful: Saved {} records".format(clean_records))
         except Exception as fallback_error:
-            print(f"❌ Fallback also failed: {fallback_error}")
+            print("Fallback also failed: {}".format(fallback_error))
             raise
 
 # COMMAND ----------
@@ -860,7 +722,7 @@ if activity_metrics_df is not None:
         try:
             existing_activity = spark.table("github_activity_metrics")
             existing_count = existing_activity.count()
-            print(f"Found existing activity metrics table with {existing_count} records")
+            print("Found existing activity metrics table with {} records".format(existing_count))
         except Exception as e:
             table_exists = False
             print("Activity metrics table doesn't exist - will create new table")
@@ -899,12 +761,12 @@ if activity_metrics_df is not None:
                  .option("overwriteSchema", "true")
                  .partitionBy("partition_date", "measurement_period")
                  .saveAsTable("github_activity_metrics"))
-                print(f"✅ Created new activity metrics table with {metrics_records} records")
+                print("Created new activity metrics table with {} records".format(metrics_records))
             else:
                 print("No activity metrics to save")
         
     except Exception as e:
-        print(f"❌ Error with Activity Metrics Delta merge: {e}")
+        print("Error with Activity Metrics Delta merge: {}".format(e))
         raise
 
 # COMMAND ----------
@@ -919,12 +781,12 @@ print("\nSummary:")
 if repos_final_df is not None:
     total_repos = repos_final_df.count()
     active_repos = repos_final_df.filter(F.col("is_active")).count()
-    print(f"   Repositories processed: {total_repos}")
-    print(f"   Active repositories: {active_repos}")
+    print("   Repositories processed: {}".format(total_repos))
+    print("   Active repositories: {}".format(active_repos))
 
 if activity_metrics_df is not None:
     total_metrics = activity_metrics_df.count()
-    print(f"   Activity metrics calculated: {total_metrics}")
+    print("   Activity metrics calculated: {}".format(total_metrics))
 
 
 print("\nData ready for Gold layer analytics!")
