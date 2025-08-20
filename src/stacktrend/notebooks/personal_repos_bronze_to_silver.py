@@ -206,19 +206,15 @@ Must return exactly {} classification objects here.""".format(len(repo_data_list
             "Content-Type": "application/json"
         }
         
-        # Debug output
-        print("API Call Details:")
-        print("  URL: {}".format(url))
-        print("  Model: {}".format(model))
-        print("  Prompt length: {} chars".format(len(prompt)))
-        print("  Repositories to classify: {}".format(len(repo_data_list)))
+        # API call info
+        print("Calling Azure OpenAI for {} repositories".format(len(repo_data_list)))
         
         payload = {
             "messages": [
                 {"role": "system", "content": "You are a precise repository classifier. Return only valid JSON arrays as requested."},
                 {"role": "user", "content": prompt}
             ],
-            "max_completion_tokens": 2000,  # Correct parameter name for 2025 API
+            "max_completion_tokens": 4000,  # Increased for longer responses
             "response_format": {"type": "json_object"}
         }
         
@@ -238,37 +234,17 @@ Must return exactly {} classification objects here.""".format(len(repo_data_list
                 if response.status != 200:
                     raise Exception("Azure OpenAI API error {}: {}".format(response.status, response_body))
                 
-                # Debug the raw response
-                print("Response received, length: {} chars".format(len(response_body)))
-                print("First 200 chars: {}".format(response_body[:200]))
-                
                 # Parse the response
                 result = json.loads(response_body)
+                content = result['choices'][0]['message']['content']
                 
-                # Debug the full response structure
-                print("Full API response keys: {}".format(list(result.keys())))
-                if 'choices' in result:
-                    print("Choices length: {}".format(len(result['choices'])))
-                    if result['choices']:
-                        choice = result['choices'][0]
-                        print("First choice keys: {}".format(list(choice.keys())))
-                        if 'message' in choice:
-                            message = choice['message']
-                            print("Message keys: {}".format(list(message.keys())))
-                            content = message.get('content', '')
-                        else:
-                            content = ''
-                    else:
-                        content = ''
-                else:
-                    content = ''
+                # Check for truncation
+                finish_reason = result['choices'][0].get('finish_reason', '')
+                if finish_reason == 'length':
+                    raise Exception("Response truncated due to token limit. Reduce batch size or increase max_completion_tokens.")
                 
-                print("LLM content length: {} chars".format(len(content) if content else 0))
-                print("LLM content preview: {}".format(content[:200] if content else "EMPTY"))
-                
-                # Parse the LLM's JSON response
                 if not content or content.strip() == "":
-                    raise Exception("LLM returned empty content. Full response: {}".format(response_body[:500]))
+                    raise Exception("LLM returned empty content. Finish reason: {}".format(finish_reason))
                 
                 return json.loads(content)
                 
@@ -339,22 +315,34 @@ def classify_repositories_with_llm(repositories_df):
         
         print("Running LLM classification on {} repositories...".format(repos_needing_llm.count()))
         
-        # Use zero-dependency LLM classification (no external packages!)
+        # Use zero-dependency LLM classification with smaller batches to avoid token limits
         try:
-            response_data = classify_repo_batch(
-                repo_data_list, 
-                azure_openai_api_key, 
-                azure_openai_endpoint, 
-                azure_openai_model
-            )
+            # Process in small batches to avoid token limit issues
+            batch_size = 3  # Small batches to ensure responses fit in token limit
+            all_classifications = []
             
-            # Parse classifications from response
-            if isinstance(response_data, dict) and 'classifications' in response_data:
-                classifications = response_data['classifications']
-            elif isinstance(response_data, list):
-                classifications = response_data
-            else:
-                raise Exception("Unexpected response format from Azure OpenAI")
+            for i in range(0, len(repo_data_list), batch_size):
+                batch = repo_data_list[i:i + batch_size]
+                print("Processing batch {}: {} repositories".format(i//batch_size + 1, len(batch)))
+                
+                batch_response = classify_repo_batch(
+                    batch, 
+                    azure_openai_api_key, 
+                    azure_openai_endpoint, 
+                    azure_openai_model
+                )
+                
+                # Parse classifications from batch response
+                if isinstance(batch_response, dict) and 'classifications' in batch_response:
+                    batch_classifications = batch_response['classifications']
+                elif isinstance(batch_response, list):
+                    batch_classifications = batch_response
+                else:
+                    raise Exception("Unexpected response format from Azure OpenAI")
+                
+                all_classifications.extend(batch_classifications)
+            
+            classifications = all_classifications
                 
         except Exception as e:
             print("LLM classification failed: {}".format(str(e)))
