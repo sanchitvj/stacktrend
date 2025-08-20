@@ -108,28 +108,60 @@ def fabric_native_llm_classifier():
     def classify_repo_batch(repo_data_list, api_key, endpoint, model="o4-mini"):
         """Call Azure OpenAI directly using urllib (no external dependencies)."""
         
-        # Create the prompt exactly like the original
-        prompt = """You are an expert at classifying GitHub repositories into technology categories.
+        # Create the prompt exactly like the original working classifier
+        prompt = """You are an expert software engineer analyzing GitHub repositories. Classify these {} repositories into technology categories based on their PRIMARY purpose and functionality.
 
-Classify each repository into ONE primary category and subcategory based on the repository name, description, topics, and primary language.
+PRIMARY CATEGORIES (choose exactly one):
+- AI: Large Language Models, Generative AI, Agentic AI, MCP Servers, Autonomous Agents, AI Infrastructure
+- ML: Machine Learning, Deep Learning, MLOps, Data Science, Computer Vision, NLP, Statistical Models
+- DataEngineering: Data Pipelines, ETL/ELT, Streaming, DataOps, Data Mesh, Analytics Engineering, Data Quality
+- Databases: SQL/NoSQL databases, Vector Stores, Time Series DBs, Graph Databases, Distributed Systems, Caching
+- WebDevelopment: Frontend/Backend, Mobile Apps, APIs, Web Frameworks, Serverless, JAMstack, Progressive Web Apps
+- DevOps: CI/CD, Infrastructure as Code, Containerization, Monitoring, GitOps, Cloud Engineering
+- CloudServices: Cloud Provider Tools, Serverless Platforms, SaaS SDKs, IaaS/PaaS Tools, Multi-Cloud
+- Security: Cybersecurity, DevSecOps, Identity Management, Threat Detection, Cryptography, Zero Trust
+- ProgrammingLanguages: Language Implementations, Compilers, Interpreters, Language Servers, Build Systems
+- Other: General utilities, gaming, system tools, educational content, miscellaneous
 
-Categories:
-- AI: artificial-intelligence, machine-learning, deep-learning, neural-networks, llm, nlp
-- ML: machine-learning, scikit-learn, tensorflow, pytorch, data-science, statistics  
-- DataEngineering: data-pipeline, etl, data-processing, apache-spark, airflow, kafka
-- Database: database, sql, nosql, postgresql, mongodb, redis, orm
-- WebDev: web-development, frontend, backend, react, vue, angular, nodejs, express
-- DevOps: devops, docker, kubernetes, ci-cd, infrastructure, monitoring, deployment
-- Other: everything else that doesn't clearly fit above categories
+SUBCATEGORY GUIDELINES:
+- AI: generative_ai, llm_tools, agentic_ai, mcp_servers, autonomous_agents, ai_infrastructure, reinforcement_learning
+- ML: deep_learning, machine_learning, mlops, data_science, model_serving, computer_vision, nlp, statistical_models
+- DataEngineering: etl, streaming, orchestration, dataops, data_mesh, analytics_engineering, data_quality, real_time_processing
+- Databases: relational, nosql, vector_db, time_series, graph_db, distributed_db, caching, in_memory
+- WebDevelopment: frontend, backend, fullstack, mobile, api, web_framework, serverless, jamstack, pwa
+- DevOps: containerization, ci_cd, monitoring, infrastructure_as_code, gitops, cloud_engineering, observability
+- CloudServices: aws_tools, azure_tools, gcp_tools, multi_cloud, serverless_platforms, saas_tools, paas_tools
+- Security: cybersecurity, devsecops, identity_management, threat_detection, cryptography, zero_trust, compliance
+- ProgrammingLanguages: language_implementation, compilers, interpreters, language_servers, build_tools, package_managers
+- Other: utilities, gaming, system_tools, educational, documentation, testing_tools
 
-For each repository, return:
-- repo_id: the repository ID
-- primary_category: one of the categories above
-- subcategory: specific technology or subcategory
-- confidence: float between 0.0 and 1.0
+ENHANCED CLASSIFICATION RULES:
+1. Analyze repository NAME, DESCRIPTION, TOPICS, and PRIMARY LANGUAGE to understand core purpose
+2. Prioritize the MAIN functionality over supporting technologies (e.g., a web app using ML is WebDevelopment, not ML)
+3. Consider modern patterns: AI-first applications, cloud-native architectures, serverless designs
+4. Key indicators to look for:
+   - AI/ML: model training, inference, transformers, neural networks, AI agents
+   - DataEngineering: pipeline, ETL, streaming, kafka, airflow, spark, data lake
+   - Security: auth, encryption, security scanning, vulnerability, penetration testing
+   - CloudServices: AWS/Azure/GCP in name, terraform, kubernetes operators for cloud
+5. Confidence scoring:
+   - 0.9+: Clear technology stack and purpose evident
+   - 0.8+: Strong indicators with minor ambiguity
+   - 0.7+: Reasonable certainty based on available information
+   - 0.6+: Educated guess with limited information
+6. Avoid "Other" unless truly unclear or doesn't fit established patterns
+
+MODERN TECHNOLOGY INDICATORS:
+- Vector databases, embeddings → Databases (vector_db)
+- LLM applications, RAG systems → AI (llm_tools)
+- Data mesh, DataOps → DataEngineering (data_mesh, dataops)
+- GitOps, ArgoCD → DevOps (gitops)
+- JAMstack, Edge computing → WebDevelopment (jamstack)
+- Zero Trust, SIEM → Security (zero_trust, threat_detection)
+- MCP protocol implementations, Model Context Protocol → AI (mcp_servers)
 
 Repositories to classify:
-"""
+""".format(len(repo_data_list))
         
         for i, repo in enumerate(repo_data_list, 1):
             topics_str = ", ".join(repo.get('topics', [])[:5]) if repo.get('topics') else "none"
@@ -149,12 +181,20 @@ Repositories to classify:
             )
         
         prompt += """
-Return JSON object with classifications array for all {} repositories:
+
+Return ONLY a valid JSON object with a "classifications" array:
 {{
     "classifications": [
-        {{"repo_id": 123, "primary_category": "AI", "subcategory": "machine-learning", "confidence": 0.95}}
+        {{
+            "repo_id": "123",
+            "primary_category": "AI",
+            "subcategory": "llm_tools", 
+            "confidence": 0.95
+        }}
     ]
-}}""".format(len(repo_data_list))
+}}
+
+Must return exactly {} classification objects here.""".format(len(repo_data_list))
         
         # Make HTTP request to Azure OpenAI
         url = "{}/openai/deployments/{}/chat/completions?api-version=2025-01-01-preview".format(
@@ -168,11 +208,10 @@ Return JSON object with classifications array for all {} repositories:
         
         payload = {
             "messages": [
-                {"role": "system", "content": "You are a technology classification expert. Always respond with valid JSON."},
+                {"role": "system", "content": "You are a precise repository classifier. Return only valid JSON arrays as requested."},
                 {"role": "user", "content": prompt}
             ],
-            "max_tokens": 2000,
-            "temperature": 0.1,
+            "max_completion_tokens": 2000,  # Correct parameter name for 2025 API
             "response_format": {"type": "json_object"}
         }
         
@@ -187,12 +226,18 @@ Return JSON object with classifications array for all {} repositories:
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
                 if response.status != 200:
-                    raise Exception("Azure OpenAI API error {}: {}".format(response.status, response.read().decode()))
+                    error_body = response.read().decode()
+                    raise Exception("Azure OpenAI API error {}: {}".format(response.status, error_body))
                 
                 result = json.loads(response.read().decode())
                 content = result['choices'][0]['message']['content']
                 return json.loads(content)
                 
+        except urllib.error.HTTPError as e:
+            # Read the error response body for debugging
+            error_body = e.read().decode() if hasattr(e, 'read') else str(e)
+            print("Azure OpenAI HTTP Error {}: {}".format(e.code, error_body))
+            raise Exception("Azure OpenAI API error {}: {}".format(e.code, error_body))
         except Exception as e:
             raise Exception("Azure OpenAI API call failed: {}".format(str(e)))
     
