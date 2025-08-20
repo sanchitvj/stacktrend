@@ -1,19 +1,19 @@
-name: Deploy Fabric Notebooks
+name: Deploy Personal Repos Notebooks
 
 on:
   push:
     branches: [dev]
     paths: 
-      - 'src/stacktrend/notebooks/bronze_to_silver_transformation.py'
-      - 'src/stacktrend/notebooks/silver_to_gold_analytics.py'
-      - 'src/stacktrend/notebooks/github_data_ingestion.py'
-      - 'src/stacktrend/utils/deploy_notebooks.py'
+      - 'src/stacktrend/notebooks/personal_repos_ingestion.py'
+      - 'src/stacktrend/notebooks/personal_repos_bronze_to_silver.py'
+      - 'src/stacktrend/notebooks/personal_repos_silver_to_gold.py'
+      - 'src/stacktrend/utils/deploy_contributors_notebooks.py'
       - 'src/stacktrend/utils/llm_classifier.py'
       - 'src/stacktrend/config/settings.py'
-      - '.github/workflows/deploy-fabric-notebooks.yml'
+      - '.github/workflows/deploy-contributors-notebooks.yml'
 
 jobs:
-  deploy-notebooks:
+  deploy-personal-repos-notebooks:
     runs-on: ubuntu-latest
     
     steps:
@@ -30,15 +30,16 @@ jobs:
         python -m pip install --upgrade pip
         pip install .
         
-    - name: Deploy to Fabric
+    - name: Deploy Contributors Notebooks to Fabric
       env:
         FABRIC_TENANT_ID: ${{ secrets.FABRIC_TENANT_ID }}
         FABRIC_CLIENT_ID: ${{ secrets.FABRIC_CLIENT_ID }}
         FABRIC_CLIENT_SECRET: ${{ secrets.FABRIC_CLIENT_SECRET }}
         FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+        DEPLOYMENT_TYPE: contributors
       run: |
-        python -m src.stacktrend.utils.deploy_notebooks
+        python -m src.stacktrend.utils.deploy_contributors_notebooks
         
     - name: Report deployment status
       run: |
-        echo "✅ Notebook deployment completed successfully!"
+        echo "✅ Contributors notebook deployment completed successfully!"
