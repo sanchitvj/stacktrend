@@ -85,15 +85,15 @@ ANALYSIS_WINDOW_DAYS = 30
 # COMMAND ----------
 # Read Silver layer data from table
 try:
-    # Read from the silver_repositories table (cross-lakehouse reference)
+    # Read from the github_curated table (cross-lakehouse reference)
     # Try mounted path first, fallback to cross-lakehouse reference
     try:
-        silver_df = spark.read.format("delta").load("/mnt/silver/Tables/silver_repositories")
+        silver_df = spark.read.format("delta").load("/mnt/silver/Tables/github_curated")
         print("SUCCESS: Successfully loaded from mounted Silver lakehouse")
     except Exception as e:
         print(f"Error loading from mounted Silver lakehouse: {e}")
         # Fallback to cross-lakehouse table reference
-        silver_df = spark.table("stacktrend_silver_lh.silver_repositories")
+        silver_df = spark.table("stacktrend_silver_lh.github_curated")
         print("SUCCESS: Successfully loaded using cross-lakehouse reference")
     
     # Check if we have any data at all
@@ -325,7 +325,7 @@ try:
      .mode("overwrite")
      .option("overwriteSchema", "true")
      .partitionBy("partition_date")
-     .saveAsTable("gold_technology_metrics"))
+     .saveAsTable("tech_metrics"))
     
     gold_record_count = final_gold_df.count()
     print(f"SUCCESS: Successfully wrote {gold_record_count} records to Gold layer")
@@ -350,4 +350,321 @@ print("Top Technologies by Momentum Score:")
  .orderBy(F.desc("momentum_score"))
  .show(5, truncate=False))
 
-print("Silver to Gold analytics transformation completed successfully")
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Table 2: Individual Repository Rankings
+
+# COMMAND ----------
+# Create repo_ranks table - Individual repository insights
+repo_ranks_df = (silver_df
+    .withColumn("momentum_score", 
+                F.log10(F.greatest(F.col("stargazers_count"), F.lit(1))) * 10 +
+                F.col("star_velocity_30d") * 100 + 
+                F.col("community_health_score") * 30)
+    .withColumn("quality_rank", 
+                F.row_number().over(Window.partitionBy("technology_category")
+                                   .orderBy(F.desc("quality_score"))))
+    .withColumn("popularity_rank",
+                F.row_number().over(Window.orderBy(F.desc("stargazers_count"))))
+    .withColumn("growth_rank",
+                F.row_number().over(Window.orderBy(F.desc("star_velocity_30d"))))
+    .select(
+        "repository_id",
+        "name",
+        "full_name", 
+        "technology_category",
+        "technology_subcategory",
+        "stargazers_count",
+        "forks_count",
+        "momentum_score",
+        "quality_rank",
+        "popularity_rank", 
+        "growth_rank",
+        "community_health_score",
+        "is_active",
+        F.lit(PROCESSING_DATE).alias("last_updated"),
+        F.lit(PROCESSING_DATE).alias("partition_date")
+    )
+)
+
+# Save repo_ranks table
+try:
+    (repo_ranks_df
+     .write
+     .format("delta")
+     .mode("overwrite")
+     .option("overwriteSchema", "true")
+     .partitionBy("partition_date", "technology_category")
+     .saveAsTable("repo_ranks"))
+    
+    print(f"SUCCESS: Created repo_ranks table with {repo_ranks_df.count()} records")
+except Exception as e:
+    print(f"❌ Error creating repo_ranks: {e}")
+
+# COMMAND ----------
+# MAGIC %md 
+# MAGIC ## Table 3: Daily Technology Trends
+
+# COMMAND ----------
+# Create trend_daily table - Daily technology trend tracking
+trend_daily_df = (silver_df
+    .groupBy("technology_category", "partition_date")
+    .agg(
+        F.count("repository_id").alias("total_repos"),
+        F.sum("stargazers_count").alias("total_stars"),
+        F.sum("forks_count").alias("total_forks"),
+        F.avg("star_velocity_30d").alias("avg_daily_growth"),
+        F.avg("community_health_score").alias("avg_health"),
+        F.sum(F.when(F.col("is_active"), 1).otherwise(0)).alias("active_repos")
+    )
+    .withColumn("growth_rate", F.col("avg_daily_growth") * 30)  # Monthly projection
+    .withColumn("market_share", 
+                F.col("total_stars") / F.sum("total_stars").over(Window.partitionBy("partition_date")) * 100)
+    .withColumn("momentum_change", F.lit(0.0))  # Placeholder for historical comparison
+    .withColumn("rank_change", F.lit(0))        # Placeholder for historical comparison
+    .select(
+        F.col("partition_date").alias("date"),
+        "technology_category",
+        "total_repos", 
+        "total_stars",
+        "avg_daily_growth",
+        "growth_rate",
+        "market_share",
+        "momentum_change",
+        "rank_change",
+        "avg_health",
+        F.lit(PROCESSING_DATE).alias("partition_date")
+    )
+)
+
+# Save trend_daily table
+try:
+    (trend_daily_df
+     .write
+     .format("delta") 
+     .mode("overwrite")
+     .option("overwriteSchema", "true")
+     .partitionBy("partition_date")
+     .saveAsTable("trend_daily"))
+    
+    print(f"SUCCESS: Created trend_daily table with {trend_daily_df.count()} records")
+except Exception as e:
+    print(f"❌ Error creating trend_daily: {e}")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Table 4: Technology Health Assessment  
+
+# COMMAND ----------
+# Create tech_health table - Technology sustainability and risk
+tech_health_df = (silver_df
+    .groupBy("technology_category")
+    .agg(
+        F.avg("community_health_score").alias("health_score"),
+        F.count("repository_id").alias("maintainer_count"),  # Approximation
+        F.countDistinct("license_category").alias("license_diversity"),
+        F.avg("quality_score").alias("avg_quality"),
+        F.sum(F.when(F.col("is_active"), 1).otherwise(0)).alias("active_projects"),
+        F.avg("days_since_push").alias("avg_days_since_activity"),
+        F.stddev("stargazers_count").alias("star_distribution_stddev")
+    )
+    .withColumn("sustainability_rating",
+                F.when(F.col("health_score") >= 0.8, "excellent")
+                .when(F.col("health_score") >= 0.6, "good") 
+                .when(F.col("health_score") >= 0.4, "fair")
+                .otherwise("poor"))
+    .withColumn("risk_level",
+                F.when(F.col("avg_days_since_activity") > 90, "high")
+                .when(F.col("avg_days_since_activity") > 30, "medium")
+                .otherwise("low"))
+    .select(
+        "technology_category",
+        "health_score", 
+        "risk_level",
+        "maintainer_count",
+        "license_diversity",
+        "sustainability_rating",
+        "active_projects",
+        "avg_quality",
+        F.lit(PROCESSING_DATE).alias("last_assessed"),
+        F.lit(PROCESSING_DATE).alias("partition_date")
+    )
+)
+
+# Save tech_health table
+try:
+    (tech_health_df
+     .write
+     .format("delta")
+     .mode("overwrite") 
+     .option("overwriteSchema", "true")
+     .partitionBy("partition_date")
+     .saveAsTable("tech_health"))
+     
+    print(f"SUCCESS: Created tech_health table with {tech_health_df.count()} records")
+except Exception as e:
+    print(f"❌ Error creating tech_health: {e}")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Table 5: Programming Language Statistics
+
+# COMMAND ----------
+# Create lang_stats table - Programming language insights
+lang_stats_df = (silver_df
+    .select("primary_language", "stargazers_count", "forks_count", "star_velocity_30d", "is_active")
+    .filter(F.col("primary_language").isNotNull())
+    .groupBy("primary_language")
+    .agg(
+        F.count("*").alias("repo_count"),
+        F.sum("stargazers_count").alias("total_stars"),
+        F.avg("stargazers_count").alias("avg_stars"),
+        F.avg("star_velocity_30d").alias("growth_rate"),
+        F.sum(F.when(F.col("is_active"), 1).otherwise(0)).alias("active_repos")
+    )
+    .withColumn("star_percentage", 
+                F.col("total_stars") / F.sum("total_stars").over(Window.partitionBy()) * 100)
+    .withColumn("popularity_rank",
+                F.row_number().over(Window.orderBy(F.desc("total_stars"))))
+    .withColumn("adoption_stage",
+                F.when(F.col("growth_rate") > 1.0, "emerging")
+                .when(F.col("growth_rate") > 0.3, "growing")
+                .when(F.col("repo_count") >= 20, "mature") 
+                .otherwise("stable"))
+    .select(
+        "primary_language",
+        "repo_count",
+        "total_stars",
+        "star_percentage", 
+        "growth_rate",
+        "popularity_rank",
+        "adoption_stage",
+        "active_repos",
+        F.lit(PROCESSING_DATE).alias("partition_date")
+    )
+)
+
+# Save lang_stats table
+try:
+    (lang_stats_df
+     .write
+     .format("delta")
+     .mode("overwrite")
+     .option("overwriteSchema", "true") 
+     .partitionBy("partition_date")
+     .saveAsTable("lang_stats"))
+     
+    print(f"SUCCESS: Created lang_stats table with {lang_stats_df.count()} records")
+except Exception as e:
+    print(f"❌ Error creating lang_stats: {e}")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Table 6: Market Pulse Indicators
+
+# COMMAND ----------
+# Create market_pulse table - Market-level indicators
+market_pulse_df = spark.createDataFrame([
+    {
+        "date": PROCESSING_DATE,
+        "total_technologies": final_gold_df.count(),
+        "emerging_techs": final_gold_df.filter(F.col("adoption_lifecycle") == "emerging").count(),
+        "declining_techs": final_gold_df.filter(F.col("adoption_lifecycle") == "declining").count(), 
+        "total_repositories": silver_df.count(),
+        "total_stars": silver_df.agg(F.sum("stargazers_count")).collect()[0][0],
+        "avg_momentum": final_gold_df.agg(F.avg("momentum_score")).collect()[0][0],
+        "market_volatility": final_gold_df.agg(F.stddev("momentum_score")).collect()[0][0],
+        "active_percentage": silver_df.filter(F.col("is_active")).count() / silver_df.count() * 100,
+        "partition_date": PROCESSING_DATE
+    }
+])
+
+# Save market_pulse table  
+try:
+    (market_pulse_df
+     .write
+     .format("delta")
+     .mode("overwrite")
+     .option("overwriteSchema", "true")
+     .partitionBy("partition_date")
+     .saveAsTable("market_pulse"))
+     
+    print(f"SUCCESS: Created market_pulse table with {market_pulse_df.count()} records")
+except Exception as e:
+    print(f"❌ Error creating market_pulse: {e}")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Table 7: Technology Adoption Matrix
+
+# COMMAND ----------
+# Create adoption_matrix table - Technology co-occurrence patterns
+# This analyzes which technologies appear together in repository topics
+adoption_matrix_df = (silver_df
+    .select("technology_category", "technology_subcategory", "topics_standardized", "stargazers_count")
+    .filter(F.col("topics_standardized").isNotNull())
+    .withColumn("topic_array", F.split(F.col("topics_standardized"), ","))
+    .select("technology_category", "stargazers_count", F.explode("topic_array").alias("topic"))
+    .filter(F.col("topic") != F.col("technology_category"))  # Exclude self-references
+    .groupBy("technology_category", "topic")
+    .agg(
+        F.count("*").alias("co_occurrence_count"),
+        F.sum("stargazers_count").alias("combined_stars")
+    )
+    .filter(F.col("co_occurrence_count") >= 3)  # Minimum co-occurrence threshold
+    .withColumn("correlation_score", 
+                F.log10(F.greatest(F.col("combined_stars"), F.lit(1))) * 
+                F.sqrt(F.col("co_occurrence_count")))
+    .withColumn("ecosystem_strength",
+                F.when(F.col("correlation_score") > 10, "strong")
+                .when(F.col("correlation_score") > 5, "moderate")
+                .otherwise("weak"))
+    .select(
+        F.col("technology_category").alias("tech_primary"),
+        F.col("topic").alias("tech_secondary"),
+        "co_occurrence_count",
+        "correlation_score",
+        "ecosystem_strength",
+        F.lit(PROCESSING_DATE).alias("partition_date")
+    )
+)
+
+# Save adoption_matrix table
+try:
+    (adoption_matrix_df
+     .write
+     .format("delta")
+     .mode("overwrite")
+     .option("overwriteSchema", "true")
+     .partitionBy("partition_date")
+     .saveAsTable("adoption_matrix"))
+     
+    print(f"SUCCESS: Created adoption_matrix table with {adoption_matrix_df.count()} records")
+except Exception as e:
+    print(f"❌ Error creating adoption_matrix: {e}")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## Final Summary - All Gold Tables Created
+
+# COMMAND ----------
+# Display comprehensive analytics summary
+print(f"Gold Layer Analytics Completed - {PROCESSING_DATE}")
+print("=" * 50)
+
+# Show all tables created
+tables_created = [
+    ("tech_metrics", final_gold_df.count()),
+    ("repo_ranks", repo_ranks_df.count()),
+    ("trend_daily", trend_daily_df.count()), 
+    ("tech_health", tech_health_df.count()),
+    ("lang_stats", lang_stats_df.count()),
+    ("market_pulse", market_pulse_df.count()),
+    ("adoption_matrix", adoption_matrix_df.count())
+]
+
+print("Tables Created:")
+for table_name, record_count in tables_created:
+    print(f"  {table_name}: {record_count:,} records")
+
+print("\nSilver to Gold analytics transformation completed successfully")

@@ -37,6 +37,7 @@ from pyspark.sql.types import (
 from datetime import datetime
 import json
 import requests
+import random
 
 
 # Initialize Spark Session
@@ -88,73 +89,106 @@ else:
     print("2. Parameter name mismatch in Data Factory pipeline")
     print("3. Parameter value is empty/null")
     try:
-        current_year = datetime.now().year
-        last_year = current_year - 1
+        # Smart GitHub data collection with randomization
+        def get_existing_repository_ids():
+            """Get existing repository IDs to balance old/new repos."""
+            try:
+                existing_df = spark.table("github_repos")
+                existing_ids = [row.repository_id for row in existing_df.select("repository_id").distinct().collect()]
+                print(f"Found {len(existing_ids)} existing repositories")
+                return set(existing_ids)
+            except Exception:
+                print("No existing repositories found - first run")
+                return set()
         
-        # Comprehensive search queries - ALL repos must have >1000 stars
-        search_queries = [
-            # High-impact AI & ML (>1000 stars)
-            "artificial-intelligence+machine-learning+stars:>1000+pushed:>2023-01-01",
-            "deep-learning+neural-networks+pytorch+tensorflow+stars:>1000",
-            "large-language-model+LLM+GPT+transformer+stars:>1000",
-            "computer-vision+opencv+image-processing+stars:>1000",
-            "natural-language-processing+NLP+huggingface+stars:>1000",
+        def create_randomized_search_queries():
+            """Create randomized search queries for balanced old/new repo discovery."""
+            base_categories = [
+                "artificial-intelligence+machine-learning",
+                "deep-learning+neural-networks+pytorch+tensorflow", 
+                "large-language-model+LLM+GPT+transformer",
+                "data-engineering+ETL+data-pipeline+apache-spark",
+                "web-development+framework+react+vue+angular",
+                "devops+kubernetes+docker+containerization",
+                "database+SQL+NoSQL+postgresql+mongodb",
+                "security+cybersecurity+authentication",
+                "python+golang+rust+java+cpp",
+                "javascript+typescript+node+frontend"
+            ]
             
-            # Generative AI & Agent Systems (>1000 stars)
-            "generative-ai+openai+chatgpt+stable-diffusion+stars:>1000",
-            "langchain+llamaindex+ai-agent+autonomous+stars:>1000", 
-            "retrieval-augmented-generation+RAG+vector-database+stars:>1000",
-            "prompt-engineering+fine-tuning+model-training+stars:>1000",
+            # Randomized sorting for variety
+            sort_strategies = [
+                ("stars", "desc"),     # Popular repos
+                ("updated", "desc"),   # Recently updated  
+                ("created", "desc"),   # New repos
+                ("forks", "desc"),     # Most forked
+                ("help-wanted-issues", "desc")  # Community-driven
+            ]
             
-            # Data Engineering & Analytics (>1000 stars)
-            "data-engineering+ETL+data-pipeline+apache-spark+stars:>1000",
-            "apache-airflow+workflow+orchestration+data-processing+stars:>1000",
-            "dbt+analytics-engineering+data-transformation+stars:>1000",
-            "real-time+streaming+apache-kafka+event-driven+stars:>1000",
-            "big-data+distributed-computing+hadoop+elasticsearch+stars:>1000",
+            # Different time filters for repo age variety
+            time_filters = [
+                "pushed:>2024-06-01",   # Very recent
+                "pushed:>2024-01-01",   # This year
+                "pushed:>2023-01-01",   # Last year
+                "created:>2024-01-01",  # New repos
+                "created:>2023-01-01"   # Newer repos
+            ]
             
-            # Databases & Infrastructure (>1000 stars)
-            "database+SQL+NoSQL+postgresql+mongodb+stars:>1000",
-            "vector-database+embeddings+similarity-search+stars:>1000",
-            "redis+caching+in-memory+key-value+stars:>1000",
-            "time-series+metrics+monitoring+prometheus+stars:>1000",
+            queries = []
             
-            # Web Development & Frameworks (>1000 stars)
-            "web-development+framework+react+vue+angular+stars:>1000",
-            "backend+API+microservices+node+python+stars:>1000",
-            "frontend+javascript+typescript+css+stars:>1000",
-            "fullstack+web-application+mobile-app+stars:>1000",
+            # Generate randomized combinations
+            for _ in range(12):  # 12 randomized queries
+                category = random.choice(base_categories)
+                sort_field, sort_order = random.choice(sort_strategies)
+                time_filter = random.choice(time_filters)
+                star_min = random.choice([1000, 1500, 2000, 5000])
+                
+                query = f"{category}+stars:>{star_min}+{time_filter}"
+                queries.append((query, sort_field, sort_order))
             
-            # DevOps & Cloud Native (>1000 stars)
-            "devops+kubernetes+docker+containerization+stars:>1000",
-            "ci-cd+github-actions+automation+deployment+stars:>1000",
-            "infrastructure+terraform+cloud+AWS+azure+stars:>1000",
-            "monitoring+observability+logging+grafana+stars:>1000",
-            "security+cybersecurity+authentication+encryption+stars:>1000",
+            # Always include some guaranteed high-quality queries
+            guaranteed = [
+                ("stars:>10000+created:>2023-01-01", "stars", "desc"),
+                ("stars:>5000+updated:>2024-06-01", "updated", "desc") 
+            ]
+            queries.extend(guaranteed)
             
-            # Programming Languages & Tools (>1000 stars)
-            "python+golang+rust+java+cpp+stars:>1000",
-            "javascript+typescript+node+deno+stars:>1000", 
-            "developer-tools+CLI+productivity+automation+stars:>1000",
-            "open-source+library+framework+SDK+stars:>1000"
-        ]
+            return queries
+        
+        existing_repo_ids = get_existing_repository_ids()
+        search_queries = create_randomized_search_queries()
         
         all_repositories = []
+        new_repositories = []
+        updated_repositories = []
         successful_queries = 0
         
-        # Get multiple pages for each query to maximize data
-        for i, query in enumerate(search_queries[:12]):  # Use more queries for >1000 star repos
-            for page in range(1, 6):  # Get 5 pages per query (500 repos per query)
+        print(f"Starting smart collection with {len(search_queries)} randomized queries...")
+        
+        # Smart collection with randomization
+        for i, (query, sort_field, sort_order) in enumerate(search_queries):
+            # Randomize page selection for variety
+            pages_to_fetch = random.sample(range(1, 6), 3)  # Random 3 pages from first 5
+            
+            for page in pages_to_fetch:
                 try:
-                    url = f"https://api.github.com/search/repositories?q={query}&sort=updated&order=desc&per_page=100&page={page}"
+                    url = f"https://api.github.com/search/repositories?q={query}&sort={sort_field}&order={sort_order}&per_page=100&page={page}"
                     response = requests.get(url)
                     
                     if response.status_code == 200:
                         data = response.json()
                         repositories = data.get("items", [])
+                        
+                        for repo in repositories:
+                            repo_id = repo.get('id')
+                            if repo_id in existing_repo_ids:
+                                updated_repositories.append(repo)
+                            else:
+                                new_repositories.append(repo)
+                        
                         all_repositories.extend(repositories)
                         successful_queries += 1
-                        print(f"Query {i+1} Page {page}: {len(repositories)} repos - {query[:50]}...")
+                        print(f"Query {i+1} Page {page}: {len(repositories)} repos - Sort: {sort_field}")
                     else:
                         print(f"Query {i+1} Page {page} failed: {response.status_code}")
                         
@@ -162,25 +196,37 @@ else:
                     print(f"Query {i+1} Page {page} error: {e}")
                     continue
         
-        # Deduplicate repositories by ID and filter for >1000 stars
+        # Smart deduplication with old/new repo tracking
         seen_repos = set()
         filtered_repositories = []
+        new_repo_count = 0
+        updated_repo_count = 0
         
         for repo in all_repositories:
             repo_id = repo.get('id')
             stars = repo.get('stargazers_count', 0)
             
-            # Only include repos with >1000 stars and not already seen
+            # Only include repos with >1000 stars and not already seen in this batch
             if repo_id not in seen_repos and stars > 1000:
                 seen_repos.add(repo_id)
                 filtered_repositories.append(repo)
+                
+                # Track new vs updated repos
+                if repo_id in existing_repo_ids:
+                    updated_repo_count += 1
+                else:
+                    new_repo_count += 1
         
         # Combine all data
         combined_data = {"items": filtered_repositories}
         github_response = json.dumps(combined_data)
         
-        print(f"Retrieved {len(all_repositories)} total repositories from {successful_queries} queries")
-        print(f"After deduplication and >1000 star filter: {len(filtered_repositories)} repositories")
+        print("Smart Collection Results:")
+        print(f"  Total retrieved: {len(all_repositories)} from {successful_queries} queries")
+        print(f"  After deduplication: {len(filtered_repositories)} repositories")
+        print(f"  New repositories: {new_repo_count}")
+        print(f"  Updated repositories: {updated_repo_count}")
+        print(f"  Balance ratio: {new_repo_count}/{updated_repo_count} (new/updated)")
         
     except Exception as e:
         raise Exception(f"Could not get GitHub data: {e}")
@@ -286,30 +332,90 @@ except Exception as e:
 # MAGIC ## Save to Bronze Lakehouse
 
 # COMMAND ----------
-# Write to Bronze lakehouse (using default lakehouse configuration)
+# Smart Delta merge to Bronze lakehouse
 try:
     if record_count > 0:
-        bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repositories")
-        print(f"SUCCESS: Saved {record_count} records to Bronze lakehouse")
-    else:
-        print("WARNING: No data to save - creating empty table with proper schema")
-        # Save the empty DataFrame with schema to ensure table exists
-        bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repositories")
-        print("SUCCESS: Created empty Bronze table with proper schema")
+        # Check if table exists for merge vs create
+        table_exists = True
+        try:
+            existing_df = spark.table("github_repos")
+            existing_count = existing_df.count()
+            print(f"Found existing table with {existing_count} records")
+        except Exception:
+            table_exists = False
+            print("Table doesn't exist - will create new table")
         
-        # Log the issue for debugging
-        print("DEBUGGING: No repositories were ingested")
-        print("Possible causes:")
-        print("1. GitHub API parameter not passed from Data Factory")
-        print("2. GitHub API calls failed (rate limits, network issues)")
-        print("3. Empty API responses")
+        if table_exists:
+            print("Performing Delta merge upsert...")
+            
+            # Create temporary view for merge
+            bronze_df.createOrReplaceTempView("new_github_data")
+            
+            # DELTA MERGE: Update metrics for existing repos, insert new ones
+            merge_sql = """
+            MERGE INTO github_repos AS target
+            USING new_github_data AS source
+            ON target.repository_id = source.repository_id
+            
+            WHEN MATCHED THEN
+              UPDATE SET
+                name = source.name,
+                full_name = source.full_name,
+                description = source.description,
+                updated_at = source.updated_at,
+                pushed_at = source.pushed_at,
+                stargazers_count = source.stargazers_count,
+                watchers_count = source.watchers_count,
+                forks_count = source.forks_count,
+                open_issues_count = source.open_issues_count,
+                size = source.size,
+                topics = source.topics,
+                has_wiki = source.has_wiki,
+                has_pages = source.has_pages,
+                archived = source.archived,
+                disabled = source.disabled,
+                ingestion_timestamp = source.ingestion_timestamp
+                
+            WHEN NOT MATCHED THEN
+              INSERT *
+            """
+            
+            spark.sql(merge_sql)
+            
+            # Get merge statistics
+            final_count = spark.table("github_repos").count()
+            new_records = final_count - existing_count
+            updated_records = record_count - max(0, new_records)
+            
+            print("Delta merge completed:")
+            print(f"  Total records now: {final_count}")
+            print(f"  New records added: {max(0, new_records)}")
+            print(f"  Records updated: {updated_records}")
+            
+        else:
+            # First time - create table with overwrite
+            bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repos")
+            print(f"Created new Bronze table with {record_count} records")
+            
+    else:
+        print("No data to save - creating/maintaining empty table")
+        if not table_exists:
+            bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repos")
+            print("✅ Created empty Bronze table with proper schema")
+        else:
+            print("Existing table maintained, no new data to merge")
     
 except Exception as e:
-    print(f"ERROR: Error saving to Bronze lakehouse: {e}")
-    print(f"Record count: {record_count}")
-    print("DataFrame schema:")
-    bronze_df.printSchema()
-    raise
+    print(f"❌ Error with Delta merge: {e}")
+    print("Falling back to overwrite mode...")
+    try:
+        bronze_df.write.format("delta").mode("overwrite").saveAsTable("github_repos")
+        print(f"✅ Fallback successful: Saved {record_count} records")
+    except Exception as fallback_error:
+        print(f"❌ Fallback also failed: {fallback_error}")
+        print(f"Record count: {record_count}")
+        bronze_df.printSchema()
+        raise
 
 # COMMAND ----------
 # MAGIC %md
