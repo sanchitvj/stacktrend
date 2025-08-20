@@ -124,15 +124,34 @@ class FabricContributorsNotebookDeployer:
             response = requests.post(url, headers=headers, json=payload)
             response.raise_for_status()
             
-            data = response.json()
-            notebook_id = data.get("id")
-            print(f"✅ Created notebook: {name}")
-            return notebook_id
+            # Better response handling
+            try:
+                data = response.json()
+                if data is None:
+                    print("❌ API returned null response")
+                    print("Response status: {}".format(response.status_code))
+                    print("Response text: {}".format(response.text[:500]))
+                    return None
+                
+                notebook_id = data.get("id") if isinstance(data, dict) else None
+                if notebook_id:
+                    print("✅ Created notebook: {}".format(name))
+                    return notebook_id
+                else:
+                    print("❌ No notebook ID in response")
+                    print("Response data: {}".format(str(data)[:500]))
+                    return None
+                    
+            except ValueError as json_error:
+                print("❌ Invalid JSON response: {}".format(json_error))
+                print("Response text: {}".format(response.text[:500]))
+                return None
             
         except requests.exceptions.RequestException as e:
-            print(f"❌ Failed to create notebook {name}: {e}")
+            print("❌ Failed to create notebook {}: {}".format(name, e))
             if hasattr(e, 'response') and e.response is not None:
-                print(f"Response: {e.response.text}")
+                print("Response status: {}".format(e.response.status_code))
+                print("Response text: {}".format(e.response.text[:500]))
             return None
     
     def update_notebook(self, notebook_id: str, content: str) -> bool:
