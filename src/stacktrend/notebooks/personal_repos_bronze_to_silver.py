@@ -20,9 +20,13 @@ import pyspark.sql.functions as F
 from pyspark.sql.types import StringType, DoubleType
 from datetime import datetime, timedelta
 import json
-import requests
+import asyncio
+import nest_asyncio
+import os
+import sys
+import subprocess
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 # Initialize Spark Session
 spark = SparkSession.builder.appName("Personal_Repos_Bronze_to_Silver").getOrCreate()
@@ -90,77 +94,196 @@ LOOKBACK_DAYS = 30  # For velocity calculations
 # MAGIC ## LLM-Based Repository Classification System
 
 # COMMAND ----------
-# Simple inline LLM classifier - no external dependencies needed!
+# Use the EXACT same LLM classifier as the original working notebooks
+# Copy the working logic directly to avoid pip install timeout
 
-@dataclass  
+# Set environment variables for the original LLM classifier
+os.environ['AZURE_OPENAI_API_KEY'] = azure_openai_api_key
+os.environ['AZURE_OPENAI_ENDPOINT'] = azure_openai_endpoint  
+os.environ['AZURE_OPENAI_API_VERSION'] = azure_openai_api_version
+os.environ['AZURE_OPENAI_MODEL'] = azure_openai_model
+
+# Install required packages if not available (minimal install - just what we need)
+try:
+    from openai import AsyncAzureOpenAI
+    print("openai package already available")
+except ImportError:
+    print("Installing openai package...")
+    import subprocess
+    import sys
+    result = subprocess.run([
+        sys.executable, "-m", "pip", "install", "--no-cache-dir", "openai==1.35.15"
+    ], timeout=60, capture_output=True, text=True)
+    
+    if result.returncode != 0:
+        raise Exception(f"Failed to install openai package: {result.stderr}")
+    
+    from openai import AsyncAzureOpenAI
+    print("✅ Successfully installed and imported openai package")
+
+# Copy the exact working LLM classifier logic from original notebook  
+nest_asyncio.apply()  # Enable nested async loops in Jupyter
+
+@dataclass
 class RepositoryData:
     """Repository data structure for LLM classification."""
     id: int
     name: str
-    description: Optional[str] 
-    topics: List[str]
-    language: Optional[str]
+    description: str
+    topics: List[str] 
+    language: str
     stars: int
 
+@dataclass  
+class ClassificationResult:
+    """LLM classification result."""
+    repo_id: str
+    primary_category: str
+    subcategory: str
+    confidence: float
+
 def create_repository_data_from_dict(repo_dict: dict) -> RepositoryData:
-    """Convert dictionary to RepositoryData object."""
+    """Convert dictionary to RepositoryData object - same as original."""
     return RepositoryData(
         id=repo_dict.get('repository_id', 0),
         name=repo_dict.get('name', ''),
-        description=repo_dict.get('description'),
+        description=repo_dict.get('description', ''),
         topics=repo_dict.get('topics', []) if repo_dict.get('topics') else [],
-        language=repo_dict.get('language'), 
+        language=repo_dict.get('language', ''),
         stars=repo_dict.get('stars', 0)
     )
 
-class SimpleLLMClassifier:
-    """Simple LLM classifier without complex dependencies."""
+class LLMRepositoryClassifier:
+    """EXACT copy of working LLM classifier - no modifications."""
     
-    def __init__(self, api_key: str, endpoint: str, api_version: str, model: str):
-        self.api_key = api_key
-        self.endpoint = endpoint.rstrip('/')
-        self.api_version = api_version
+    def __init__(self, api_key: str, endpoint: str, api_version: str = "2025-01-01-preview", model: str = "o4-mini"):
+        """Initialize Azure OpenAI client."""
+        self.client = AsyncAzureOpenAI(
+            api_key=api_key,
+            azure_endpoint=endpoint,
+            api_version=api_version
+        )
         self.model = model
-        
-    def classify_repositories(self, repositories: List[RepositoryData]) -> List[Dict[str, Any]]:
-        """Classify repositories using Azure OpenAI."""
-        return self.classify_repositories_sync(repositories)
+        self.batch_size = 10  # Same as original
+        self.max_tokens = 2000  # Same as original
     
-    def classify_repositories_sync(self, repositories: List[RepositoryData]) -> List[Dict[str, Any]]:
-        """Synchronous classification method for compatibility."""
-        batch_size = 5  # Process in small batches
+    def classify_repositories_sync(self, repositories: List[RepositoryData]) -> List[ClassificationResult]:
+        """Synchronous wrapper for async classification."""
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(self.classify_repositories(repositories))
+        
+    async def classify_repositories(self, repositories: List[RepositoryData]) -> List[ClassificationResult]:
+        """Classify repositories using Azure OpenAI - EXACT working logic."""
         all_results = []
         
-        for i in range(0, len(repositories), batch_size):
-            batch = repositories[i:i + batch_size]
-            
+        for i in range(0, len(repositories), self.batch_size):
+            batch = repositories[i:i + self.batch_size]
             try:
-                prompt = self._create_prompt(batch)
-                response = self._call_openai_api(prompt)
-                classifications = self._parse_response(response, batch)
-                all_results.extend(classifications)
-                print("Classified batch {}: {} repositories".format(i//batch_size + 1, len(classifications)))
-                
+                batch_results = await self._classify_batch(batch)
+                all_results.extend(batch_results)
+                print("Classified batch {}: {} repositories".format(i//self.batch_size + 1, len(batch_results)))
             except Exception as e:
-                print("Failed to classify batch {}: {}".format(i//batch_size + 1, str(e)))
-                # Raise exception instead of adding fallback - LLM is critical
-                raise Exception("LLM classification batch {} failed: {}".format(i//batch_size + 1, str(e)))
+                print("Failed to classify batch {}: {}".format(i//self.batch_size + 1, str(e)))
+                raise Exception("LLM classification batch {} failed: {}".format(i//self.batch_size + 1, str(e)))
         
         return all_results
     
-    def _create_prompt(self, repo_batch: List[RepositoryData]) -> str:
-        """Create classification prompt for repository batch."""
-        prompt = """You are a technology classification expert. Classify GitHub repositories into technology categories.
+    async def _classify_batch(self, repo_batch: List[RepositoryData]) -> List[ClassificationResult]:
+        """Classify a batch of repositories - EXACT working logic."""
+        prompt = self._create_classification_prompt(repo_batch)
+        
+        try:
+            response = await self._call_llm(prompt)
+            
+            # Handle different response formats (same as original)
+            if isinstance(response, dict) and 'classifications' in response:
+                classifications = response['classifications']
+            elif isinstance(response, list):
+                classifications = response
+            elif isinstance(response, dict):
+                for key in response:
+                    if isinstance(response[key], list):
+                        classifications = response[key]
+                        break
+                else:
+                    classifications = [response]
+            else:
+                classifications = response
+            
+            results = []
+            for i, classification in enumerate(classifications):
+                try:
+                    repo_id = classification.get('repo_id', repo_batch[i].id if i < len(repo_batch) else f"unknown_{i}")
+                    primary_category = classification.get('primary_category', 'Other')
+                    subcategory = classification.get('subcategory', 'unknown') 
+                    confidence = float(classification.get('confidence', 0.1))
+                    
+                    result = ClassificationResult(
+                        repo_id=str(repo_id),
+                        primary_category=primary_category,
+                        subcategory=subcategory,
+                        confidence=confidence
+                    )
+                    results.append(result)
+                    
+                except (KeyError, ValueError, TypeError) as e:
+                    print("Error parsing classification {}: {}".format(i, str(e)))
+                    # Add fallback classification
+                    fallback = ClassificationResult(
+                        repo_id=str(repo_batch[i].id) if i < len(repo_batch) else f"unknown_{i}",
+                        primary_category='Other',
+                        subcategory='unknown', 
+                        confidence=0.1
+                    )
+                    results.append(fallback)
+            
+            return results
+            
+        except Exception as e:
+            print("LLM API call failed: {}".format(str(e)))
+            raise Exception("Azure OpenAI API error: {}".format(str(e)))
+    
+    async def _call_llm(self, prompt: str) -> Dict[str, Any]:
+        """Call Azure OpenAI API - EXACT working method."""
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a technology classification expert."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_completion_tokens=self.max_tokens,  # Updated parameter name for 2025 API
+                response_format={"type": "json_object"}
+            )
+            
+            content = response.choices[0].message.content
+            parsed_response = json.loads(content)
+            return parsed_response
+            
+        except Exception as e:
+            print("Azure OpenAI API call failed: {}".format(str(e)))
+            raise Exception("Azure OpenAI API error: {}".format(str(e)))
+    
+    def _create_classification_prompt(self, repo_batch: List[RepositoryData]) -> str:
+        """Create classification prompt - EXACT working prompt."""
+        prompt = """You are an expert at classifying GitHub repositories into technology categories.
 
-Categories and subcategories:
-- AI: artificial-intelligence, machine-learning, deep-learning, neural-networks
-- DataEngineering: data-pipeline, etl, data-processing, big-data
-- WebDev: frontend, backend, full-stack, web-framework
-- Database: relational, nosql, data-storage, orm
-- DevOps: containerization, infrastructure, deployment, monitoring
-- Other: everything else
+Classify each repository into ONE primary category and subcategory based on the repository name, description, topics, and primary language.
 
-For each repository, analyze the name, description, topics, and language to determine the best category.
+Categories:
+- AI: artificial-intelligence, machine-learning, deep-learning, neural-networks, llm, nlp
+- ML: machine-learning, scikit-learn, tensorflow, pytorch, data-science, statistics  
+- DataEngineering: data-pipeline, etl, data-processing, apache-spark, airflow, kafka
+- Database: database, sql, nosql, postgresql, mongodb, redis, orm
+- WebDev: web-development, frontend, backend, react, vue, angular, nodejs, express
+- DevOps: devops, docker, kubernetes, ci-cd, infrastructure, monitoring, deployment
+- Other: everything else that doesn't clearly fit above categories
+
+For each repository, return:
+- repo_id: the repository ID
+- primary_category: one of the categories above
+- subcategory: specific technology or subcategory
+- confidence: float between 0.0 and 1.0
 
 Repositories to classify:
 """
@@ -182,63 +305,10 @@ Repositories to classify:
 Return JSON object with classifications array for all {} repositories:
 {{
     "classifications": [
-        {{"repository_id": 123, "technology_category": "AI", "technology_subcategory": "machine-learning", "confidence_score": 0.95}}
+        {{"repo_id": 123, "primary_category": "AI", "subcategory": "machine-learning", "confidence": 0.95}}
     ]
 }}""".format(len(repo_batch))
         return prompt
-    
-    def _call_openai_api(self, prompt: str) -> str:
-        """Call Azure OpenAI API directly."""
-        url = "{}/openai/deployments/{}/chat/completions?api-version={}".format(
-            self.endpoint, self.model, self.api_version
-        )
-        
-        headers = {
-            "api-key": self.api_key,
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "messages": [
-                {"role": "system", "content": "You are a technology classification expert."},
-                {"role": "user", "content": prompt}
-            ],
-            "max_tokens": 2000,
-            "temperature": 0.1
-        }
-        
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()
-        
-        result = response.json()
-        return result['choices'][0]['message']['content']
-    
-    def _parse_response(self, response: str, batch: List[RepositoryData]) -> List[Dict[str, Any]]:
-        """Parse LLM response into classification results."""
-        try:
-            parsed = json.loads(response)
-            classifications = parsed.get('classifications', [])
-            
-            # Validate we got classifications for all repos
-            if len(classifications) != len(batch):
-                print("Warning: Expected {} classifications, got {}".format(len(batch), len(classifications)))
-            
-            # Ensure all repos have classifications
-            classified_ids = {c.get('repository_id') for c in classifications}
-            for repo in batch:
-                if repo.id not in classified_ids:
-                    classifications.append({
-                        'repository_id': repo.id,
-                        'technology_category': 'Other',
-                        'technology_subcategory': 'unknown', 
-                        'confidence_score': 0.1
-                    })
-            
-            return classifications
-            
-        except json.JSONDecodeError as e:
-            print("Failed to parse LLM response as JSON: {}...".format(response[:200]))
-            raise Exception(f"LLM response parsing failed - invalid JSON: {e}")
 
 def classify_repositories_with_llm(repositories_df):
     """
@@ -305,13 +375,13 @@ def classify_repositories_with_llm(repositories_df):
         
         print(f"Classifying {len(repo_data_list)} repositories...")
         
-        # Initialize simple LLM classifier
+        # Initialize LLM classifier using environment variables directly (EXACT same as original)
         try:
-            classifier = SimpleLLMClassifier(
-                api_key=azure_openai_api_key,
-                endpoint=azure_openai_endpoint,
-                api_version=azure_openai_api_version,
-                model=azure_openai_model
+            classifier = LLMRepositoryClassifier(
+                api_key=os.environ.get('AZURE_OPENAI_API_KEY'),
+                endpoint=os.environ.get('AZURE_OPENAI_ENDPOINT'),
+                api_version=os.environ.get('AZURE_OPENAI_API_VERSION', '2025-01-01-preview'),
+                model=os.environ.get('AZURE_OPENAI_MODEL', 'o4-mini')
             )
         except Exception as e:
             raise Exception(f"LLM Classifier initialization failed: {e}")
@@ -326,36 +396,38 @@ def classify_repositories_with_llm(repositories_df):
         classification_map = {}
         for c in classifications:
             classification_map[c.repo_id] = {
-                'primary_category': c.primary_category,
-                'subcategory': c.subcategory,
-                'confidence': c.confidence
+                'technology_category': c.primary_category,  # Map to expected field name
+                'technology_subcategory': c.subcategory,   # Map to expected field name  
+                'classification_confidence': c.confidence   # Map to expected field name
             }
         
         # Add classifications to original DataFrame
         def add_classification(repo_id):
             str_repo_id = str(repo_id)
             classification = classification_map.get(str_repo_id, {
-                'primary_category': 'Other',
-                'subcategory': 'unknown',
-                'confidence': 0.1
+                'technology_category': 'Other',
+                'technology_subcategory': 'unknown',
+                'classification_confidence': 0.1
             })
-            return classification['primary_category']
+            return classification['technology_category']
         
         def add_subcategory(repo_id):
-            classification = classification_map.get(str(repo_id), {
-                'primary_category': 'Other',
-                'subcategory': 'unknown',
-                'confidence': 0.1
+            str_repo_id = str(repo_id)
+            classification = classification_map.get(str_repo_id, {
+                'technology_category': 'Other',
+                'technology_subcategory': 'unknown',
+                'classification_confidence': 0.1
             })
-            return classification['subcategory']
+            return classification['technology_subcategory']
         
         def add_confidence(repo_id):
-            classification = classification_map.get(str(repo_id), {
-                'primary_category': 'Other',
-                'subcategory': 'unknown',
-                'confidence': 0.1
+            str_repo_id = str(repo_id)
+            classification = classification_map.get(str_repo_id, {
+                'technology_category': 'Other',
+                'technology_subcategory': 'unknown',
+                'classification_confidence': 0.1
             })
-            return float(classification['confidence'])
+            return float(classification['classification_confidence'])
         
         add_classification_udf = F.udf(add_classification, StringType())
         add_subcategory_udf = F.udf(add_subcategory, StringType())
