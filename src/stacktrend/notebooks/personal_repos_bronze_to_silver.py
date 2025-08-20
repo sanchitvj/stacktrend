@@ -206,6 +206,13 @@ Must return exactly {} classification objects here.""".format(len(repo_data_list
             "Content-Type": "application/json"
         }
         
+        # Debug output
+        print("API Call Details:")
+        print("  URL: {}".format(url))
+        print("  Model: {}".format(model))
+        print("  Prompt length: {} chars".format(len(prompt)))
+        print("  Repositories to classify: {}".format(len(repo_data_list)))
+        
         payload = {
             "messages": [
                 {"role": "system", "content": "You are a precise repository classifier. Return only valid JSON arrays as requested."},
@@ -225,12 +232,44 @@ Must return exactly {} classification objects here.""".format(len(repo_data_list
         
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
-                if response.status != 200:
-                    error_body = response.read().decode()
-                    raise Exception("Azure OpenAI API error {}: {}".format(response.status, error_body))
+                # Read response body ONCE
+                response_body = response.read().decode()
                 
-                result = json.loads(response.read().decode())
-                content = result['choices'][0]['message']['content']
+                if response.status != 200:
+                    raise Exception("Azure OpenAI API error {}: {}".format(response.status, response_body))
+                
+                # Debug the raw response
+                print("Response received, length: {} chars".format(len(response_body)))
+                print("First 200 chars: {}".format(response_body[:200]))
+                
+                # Parse the response
+                result = json.loads(response_body)
+                
+                # Debug the full response structure
+                print("Full API response keys: {}".format(list(result.keys())))
+                if 'choices' in result:
+                    print("Choices length: {}".format(len(result['choices'])))
+                    if result['choices']:
+                        choice = result['choices'][0]
+                        print("First choice keys: {}".format(list(choice.keys())))
+                        if 'message' in choice:
+                            message = choice['message']
+                            print("Message keys: {}".format(list(message.keys())))
+                            content = message.get('content', '')
+                        else:
+                            content = ''
+                    else:
+                        content = ''
+                else:
+                    content = ''
+                
+                print("LLM content length: {} chars".format(len(content) if content else 0))
+                print("LLM content preview: {}".format(content[:200] if content else "EMPTY"))
+                
+                # Parse the LLM's JSON response
+                if not content or content.strip() == "":
+                    raise Exception("LLM returned empty content. Full response: {}".format(response_body[:500]))
+                
                 return json.loads(content)
                 
         except urllib.error.HTTPError as e:
