@@ -576,12 +576,31 @@ def classify_repositories_with_llm(repositories_df):
         
         # For repos with metrics-only update, preserve existing classifications
         if repos_for_metrics_only.count() > 0:
-            # Join with existing classifications
-            metrics_with_classification = (repos_for_metrics_only
-                .join(well_classified, "repository_id", "inner")
-                .drop(well_classified.repository_id))  # Avoid duplicate column
+            # Create lookup map for existing classifications
+            existing_classifications = {row.repository_id: (row.technology_category, row.technology_subcategory, row.classification_confidence) 
+                                     for row in well_classified.collect()}
             
-            # Combine classified and metrics-only repos
+            def get_existing_category(repo_id):
+                return existing_classifications.get(repo_id, ("Other", "unknown", 0.1))[0]
+            
+            def get_existing_subcategory(repo_id):
+                return existing_classifications.get(repo_id, ("Other", "unknown", 0.1))[1]
+                
+            def get_existing_confidence(repo_id):
+                return existing_classifications.get(repo_id, ("Other", "unknown", 0.1))[2]
+            
+            # Create UDFs for existing classifications  
+            existing_category_udf = F.udf(get_existing_category, StringType())
+            existing_subcategory_udf = F.udf(get_existing_subcategory, StringType()) 
+            existing_confidence_udf = F.udf(get_existing_confidence, DoubleType())
+            
+            # Add existing classifications using same pattern as LLM classifications
+            metrics_with_classification = (repos_for_metrics_only
+                .withColumn("technology_category", existing_category_udf(F.col("repository_id")))
+                .withColumn("technology_subcategory", existing_subcategory_udf(F.col("repository_id")))
+                .withColumn("classification_confidence", existing_confidence_udf(F.col("repository_id"))))
+            
+            # Now both DataFrames have the same schema - safe to union
             final_df = classified_repos.union(metrics_with_classification)
         else:
             final_df = classified_repos
