@@ -19,14 +19,8 @@ from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
 from pyspark.sql.types import StringType, DoubleType
 from datetime import datetime, timedelta
-import json
-import asyncio
-import nest_asyncio
 import os
 import sys
-import subprocess
-from dataclasses import dataclass
-from typing import List, Dict, Any
 
 # Initialize Spark Session
 spark = SparkSession.builder.appName("Personal_Repos_Bronze_to_Silver").getOrCreate()
@@ -84,6 +78,12 @@ print(f"   Endpoint: {azure_openai_endpoint}")
 print(f"   Model: {azure_openai_model}")
 print(f"   API Version: {azure_openai_api_version}")
 
+# Set environment variables for the LLM classifier (exactly like original)
+os.environ['AZURE_OPENAI_API_KEY'] = azure_openai_api_key
+os.environ['AZURE_OPENAI_ENDPOINT'] = azure_openai_endpoint
+os.environ['AZURE_OPENAI_API_VERSION'] = azure_openai_api_version
+os.environ['AZURE_OPENAI_MODEL'] = azure_openai_model
+
 # COMMAND ----------
 # Configuration
 PROCESSING_DATE = datetime.now().strftime("%Y-%m-%d")
@@ -94,227 +94,249 @@ LOOKBACK_DAYS = 30  # For velocity calculations
 # MAGIC ## LLM-Based Repository Classification System
 
 # COMMAND ----------
-# Use the EXACT same LLM classifier as the original working notebooks
-# Copy the working logic directly to avoid pip install timeout
-
-# Set environment variables for the original LLM classifier
-os.environ['AZURE_OPENAI_API_KEY'] = azure_openai_api_key
-os.environ['AZURE_OPENAI_ENDPOINT'] = azure_openai_endpoint  
-os.environ['AZURE_OPENAI_API_VERSION'] = azure_openai_api_version
-os.environ['AZURE_OPENAI_MODEL'] = azure_openai_model
-
-# Install required packages if not available (minimal install - just what we need)
-try:
-    from openai import AsyncAzureOpenAI
-    print("openai package already available")
-except ImportError:
-    print("Installing openai package...")
-    import subprocess
-    import sys
-    result = subprocess.run([
-        sys.executable, "-m", "pip", "install", "--no-cache-dir", "openai==1.35.15"
-    ], timeout=60, capture_output=True, text=True)
+# EXACT copy of original working notebook's LLM setup
+def ensure_stacktrend_imports():
+    """
+    Install and import stacktrend package strictly inside a function to satisfy linters.
+    Note: Dynamic imports are necessary here as packages don't exist until installed.
+    """
+    import os
     
-    if result.returncode != 0:
-        raise Exception(f"Failed to install openai package: {result.stderr}")
-    
-    from openai import AsyncAzureOpenAI
-    print("✅ Successfully installed and imported openai package")
-
-# Copy the exact working LLM classifier logic from original notebook  
-nest_asyncio.apply()  # Enable nested async loops in Jupyter
-
-@dataclass
-class RepositoryData:
-    """Repository data structure for LLM classification."""
-    id: int
-    name: str
-    description: str
-    topics: List[str] 
-    language: str
-    stars: int
-
-@dataclass  
-class ClassificationResult:
-    """LLM classification result."""
-    repo_id: str
-    primary_category: str
-    subcategory: str
-    confidence: float
-
-def create_repository_data_from_dict(repo_dict: dict) -> RepositoryData:
-    """Convert dictionary to RepositoryData object - same as original."""
-    return RepositoryData(
-        id=repo_dict.get('repository_id', 0),
-        name=repo_dict.get('name', ''),
-        description=repo_dict.get('description', ''),
-        topics=repo_dict.get('topics', []) if repo_dict.get('topics') else [],
-        language=repo_dict.get('language', ''),
-        stars=repo_dict.get('stars', 0)
-    )
-
-class LLMRepositoryClassifier:
-    """EXACT copy of working LLM classifier - no modifications."""
-    
-    def __init__(self, api_key: str, endpoint: str, api_version: str = "2025-01-01-preview", model: str = "o4-mini"):
-        """Initialize Azure OpenAI client."""
-        self.client = AsyncAzureOpenAI(
-            api_key=api_key,
-            azure_endpoint=endpoint,
-            api_version=api_version
+    # First try to import - maybe it's already installed
+    try:
+        from stacktrend.utils.llm_classifier import (
+            LLMRepositoryClassifier as _LLMRepositoryClassifier,
+            create_repository_data_from_dict as _create_repository_data_from_dict,
         )
-        self.model = model
-        self.batch_size = 10  # Same as original
-        self.max_tokens = 2000  # Same as original
+        from stacktrend.config.settings import settings as _settings
+        print("Stacktrend package already available")
+        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+    except ImportError:
+        print("Stacktrend package not found, installing...")
     
-    def classify_repositories_sync(self, repositories: List[RepositoryData]) -> List[ClassificationResult]:
-        """Synchronous wrapper for async classification."""
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(self.classify_repositories(repositories))
+    try:
+        # Try different installation approaches
+        github_read_token = os.environ.get("GITHUB_READ_TOKEN")
+        repo_ref = os.environ.get("STACKTREND_GIT_REF", "dev")
         
-    async def classify_repositories(self, repositories: List[RepositoryData]) -> List[ClassificationResult]:
-        """Classify repositories using Azure OpenAI - EXACT working logic."""
-        all_results = []
+        install_attempts = []
         
-        for i in range(0, len(repositories), self.batch_size):
-            batch = repositories[i:i + self.batch_size]
-            try:
-                batch_results = await self._classify_batch(batch)
-                all_results.extend(batch_results)
-                print("Classified batch {}: {} repositories".format(i//self.batch_size + 1, len(batch_results)))
-            except Exception as e:
-                print("Failed to classify batch {}: {}".format(i//self.batch_size + 1, str(e)))
-                raise Exception("LLM classification batch {} failed: {}".format(i//self.batch_size + 1, str(e)))
+        # Attempt 1: Direct ZIP download (avoids git operations completely)
+        install_attempts.append(f"https://github.com/sanchitvj/stacktrend/archive/{repo_ref}.zip")
+        install_attempts.append("https://github.com/sanchitvj/stacktrend/archive/main.zip")
         
-        return all_results
-    
-    async def _classify_batch(self, repo_batch: List[RepositoryData]) -> List[ClassificationResult]:
-        """Classify a batch of repositories - EXACT working logic."""
-        prompt = self._create_classification_prompt(repo_batch)
-        
+        # Attempt 2: Use pip programmatically instead of subprocess
         try:
-            response = await self._call_llm(prompt)
-            
-            # Handle different response formats (same as original)
-            if isinstance(response, dict) and 'classifications' in response:
-                classifications = response['classifications']
-            elif isinstance(response, list):
-                classifications = response
-            elif isinstance(response, dict):
-                for key in response:
-                    if isinstance(response[key], list):
-                        classifications = response[key]
-                        break
-                else:
-                    classifications = [response]
-            else:
-                classifications = response
-            
-            results = []
-            for i, classification in enumerate(classifications):
+            import pip
+            print("Trying pip programmatic installation...")
+            for url in install_attempts[:2]:  # Only try ZIP downloads first
                 try:
-                    repo_id = classification.get('repo_id', repo_batch[i].id if i < len(repo_batch) else f"unknown_{i}")
-                    primary_category = classification.get('primary_category', 'Other')
-                    subcategory = classification.get('subcategory', 'unknown') 
-                    confidence = float(classification.get('confidence', 0.1))
-                    
-                    result = ClassificationResult(
-                        repo_id=str(repo_id),
-                        primary_category=primary_category,
-                        subcategory=subcategory,
-                        confidence=confidence
-                    )
-                    results.append(result)
-                    
-                except (KeyError, ValueError, TypeError) as e:
-                    print("Error parsing classification {}: {}".format(i, str(e)))
-                    # Add fallback classification
-                    fallback = ClassificationResult(
-                        repo_id=str(repo_batch[i].id) if i < len(repo_batch) else f"unknown_{i}",
-                        primary_category='Other',
-                        subcategory='unknown', 
-                        confidence=0.1
-                    )
-                    results.append(fallback)
+                    print(f"Installing from {url}")
+                    # Use pip's internal API - different approaches for different pip versions
+                    try:
+                        # Modern pip
+                        from pip._internal import main as pip_main
+                        pip_main(['install', '--upgrade', '--no-cache-dir', url])
+                    except ImportError:
+                        # Older pip
+                        pip.main(['install', '--upgrade', '--no-cache-dir', url])
+                    print("Pip programmatic installation succeeded")
+                    break
+                except Exception as pip_error:
+                    print(f"Pip programmatic install failed: {pip_error}")
+                    continue
+        except ImportError:
+            print("Pip module not available for programmatic use")
             
-            return results
-            
-        except Exception as e:
-            print("LLM API call failed: {}".format(str(e)))
-            raise Exception("Azure OpenAI API error: {}".format(str(e)))
-    
-    async def _call_llm(self, prompt: str) -> Dict[str, Any]:
-        """Call Azure OpenAI API - EXACT working method."""
+        # Attempt 2.5: Try using importlib and direct download
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a technology classification expert."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_completion_tokens=self.max_tokens,  # Updated parameter name for 2025 API
-                response_format={"type": "json_object"}
-            )
+            import urllib.request
+            import tempfile
+            import zipfile
+            print("Trying direct download and install...")
             
-            content = response.choices[0].message.content
-            parsed_response = json.loads(content)
-            return parsed_response
-            
+            for url in install_attempts[:2]:  # ZIP URLs only
+                try:
+                    print(f"Downloading {url}")
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        zip_path = f"{temp_dir}/stacktrend.zip"
+                        urllib.request.urlretrieve(url, zip_path)
+                        
+                        # Extract zip
+                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                            zip_ref.extractall(temp_dir)
+                        
+                        # Find the extracted directory
+                        extracted_dirs = [d for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d))]
+                        if extracted_dirs:
+                            extracted_path = os.path.join(temp_dir, extracted_dirs[0])
+                            
+                            # Add to Python path
+                            if extracted_path not in sys.path:
+                                sys.path.insert(0, extracted_path)
+                            
+                            print("Direct download installation succeeded")
+                            break
+                except Exception as download_error:
+                    print(f"Direct download failed: {download_error}")
+                    continue
         except Exception as e:
-            print("Azure OpenAI API call failed: {}".format(str(e)))
-            raise Exception("Azure OpenAI API error: {}".format(str(e)))
-    
-    def _create_classification_prompt(self, repo_batch: List[RepositoryData]) -> str:
-        """Create classification prompt - EXACT working prompt."""
-        prompt = """You are an expert at classifying GitHub repositories into technology categories.
-
-Classify each repository into ONE primary category and subcategory based on the repository name, description, topics, and primary language.
-
-Categories:
-- AI: artificial-intelligence, machine-learning, deep-learning, neural-networks, llm, nlp
-- ML: machine-learning, scikit-learn, tensorflow, pytorch, data-science, statistics  
-- DataEngineering: data-pipeline, etl, data-processing, apache-spark, airflow, kafka
-- Database: database, sql, nosql, postgresql, mongodb, redis, orm
-- WebDev: web-development, frontend, backend, react, vue, angular, nodejs, express
-- DevOps: devops, docker, kubernetes, ci-cd, infrastructure, monitoring, deployment
-- Other: everything else that doesn't clearly fit above categories
-
-For each repository, return:
-- repo_id: the repository ID
-- primary_category: one of the categories above
-- subcategory: specific technology or subcategory
-- confidence: float between 0.0 and 1.0
-
-Repositories to classify:
-"""
+            print(f"Direct download approach failed: {e}")
         
-        for i, repo in enumerate(repo_batch, 1):
-            topics_str = ", ".join(repo.topics[:5]) if repo.topics else "none"
-            description = (repo.description or "no description")[:200]
+        # Attempt 3: Git methods as last resort
+        if github_read_token:
+            install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@{repo_ref}")
+        install_attempts.append(f"git+https://github.com/sanchitvj/stacktrend.git@{repo_ref}")
+        
+        # Attempt 4: Main branch git fallback
+        if github_read_token:
+            install_attempts.append(f"git+https://{github_read_token}@github.com/sanchitvj/stacktrend.git@main")
+        install_attempts.append("git+https://github.com/sanchitvj/stacktrend.git@main")
+        
+        # First, upgrade critical dependencies with force reload
+        print("Upgrading critical dependencies with force reload...")
+        try:
+            import sys
+            import subprocess
             
-            prompt += """
-{}. ID: {}
-   Name: {}
-   Description: {}
-   Topics: [{}]
-   Language: {}
-   Stars: {}
-""".format(i, repo.id, repo.name, description, topics_str, repo.language or "unknown", repo.stars)
+            # Force uninstall and reinstall to avoid cached imports
+            subprocess.run([
+                sys.executable, "-m", "pip", "uninstall", "-y", 
+                "typing_extensions", "pydantic", "openai", "typing-inspection"
+            ], timeout=60, capture_output=True, text=True)
+            
+            print("Uninstalled old versions, installing new ones...")
+            result = subprocess.run([
+                sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                "typing_extensions>=4.12.0", "pydantic>=2.8.0", "openai>=1.35.0", "nest_asyncio"
+            ], timeout=120, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print("Dependencies upgraded successfully")
+            else:
+                print(f"Dependency upgrade failed: {result.stderr}")
+                
+        except Exception as dep_error:
+            print(f"Dependency upgrade error: {dep_error}")
         
-        prompt += """
-Return JSON object with classifications array for all {} repositories:
-{{
-    "classifications": [
-        {{"repo_id": 123, "primary_category": "AI", "subcategory": "machine-learning", "confidence": 0.95}}
-    ]
-}}""".format(len(repo_batch))
-        return prompt
+        # Now try each installation method
+        for i, install_url in enumerate(install_attempts, 1):
+            print(f"Installation attempt {i}: {install_url}")
+            
+            try:
+                import sys
+                import subprocess
+                
+                # Choose installation method based on URL type
+                if install_url.startswith('http') and install_url.endswith('.zip'):
+                    # ZIP download method
+                    cmd = [
+                        sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", 
+                        "--no-cache-dir", install_url
+                    ]
+                else:
+                    # Git method
+                    cmd = [
+                        sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall", 
+                        "--no-cache-dir", install_url
+                    ]
+                
+                print(f"Running command: {' '.join(cmd)}")
+                
+                # Redirect stderr to devnull for git operations
+                with open(os.devnull, 'w') as devnull:
+                    result = subprocess.run(cmd, timeout=300, stdout=subprocess.PIPE, 
+                                          stderr=devnull if 'git+' in install_url else subprocess.PIPE, 
+                                          text=True)
+                
+                if result.returncode == 0:
+                    print(f"Installation successful from: {install_url}")
+                    break
+                else:
+                    print(f"Installation failed with exit code {result.returncode}")
+                    if result.stderr and 'git+' not in install_url:
+                        print(f"Error details: {result.stderr[:200]}")
+                    continue
+                    
+            except subprocess.TimeoutExpired:
+                print(f"Installation timeout for attempt {i}")
+                continue
+            except Exception as install_error:
+                print(f"Installation error for attempt {i}: {install_error}")
+                continue
+        else:
+            # All installation attempts failed, try force dependency reset
+            print("All installation attempts failed, trying complete dependency reset...")
+            try:
+                import sys
+                import subprocess
+                
+                # Uninstall everything first
+                subprocess.run([
+                    sys.executable, "-m", "pip", "uninstall", "-y", 
+                    "typing_extensions", "pydantic", "openai", "typing-inspection", "stacktrend"
+                ], timeout=60, capture_output=True, text=True)
+                
+                # Clear all related modules from memory
+                modules_to_clear = []
+                for module_name in list(sys.modules.keys()):
+                    if any(mod in module_name for mod in ['stacktrend', 'azure', 'openai', 'pydantic']):
+                        modules_to_clear.append(module_name)
+                
+                for module_name in modules_to_clear:
+                    try:
+                        del sys.modules[module_name]
+                    except KeyError:
+                        pass
+                
+                # Install with specific compatible versions
+                result = subprocess.run([
+                    sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                    "typing_extensions==4.12.2", "pydantic==2.8.2", "openai==1.35.15", "nest_asyncio"
+                ], timeout=120, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    print(f"Dependency reset failed: {result.stderr}")
+                    raise Exception("Complete dependency reset failed")
+                
+                print("Dependencies reset successful, trying git install...")
+                result = subprocess.run([
+                    sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall",
+                    "git+https://github.com/sanchitvj/stacktrend.git"
+                ], timeout=180, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    raise Exception(f"Final git install failed: {result.stderr}")
+                    
+            except Exception as reset_error:
+                print(f"Complete dependency reset failed: {reset_error}")
+                raise Exception(f"Cannot install stacktrend package after all attempts: {reset_error}")
+        
+        # Clear any cached imports to ensure fresh import
+        modules_to_clear = [k for k in sys.modules.keys() if k.startswith('stacktrend')]
+        for module in modules_to_clear:
+            del sys.modules[module]
+        
+        # Import after installation
+        from stacktrend.utils.llm_classifier import (
+            LLMRepositoryClassifier as _LLMRepositoryClassifier,
+            create_repository_data_from_dict as _create_repository_data_from_dict,
+        )
+        from stacktrend.config.settings import settings as _settings
+        
+        print("✅ Successfully imported stacktrend modules")
+        return _LLMRepositoryClassifier, _create_repository_data_from_dict, _settings
+        
+    except Exception as e:
+        print(f"ERROR: CRITICAL: Failed to install stacktrend package: {e}")
+        print("LLM classification is MANDATORY and cannot proceed without it")
+        raise Exception(f"LLM classification setup failed: {e}")
 
 def classify_repositories_with_llm(repositories_df):
     """
     Smart LLM classification - only classify repos that need it (not already well-classified)
     """
-    # Use simple inline classifier instead of complex imports
+    LLMRepositoryClassifier, create_repository_data_from_dict, settings = ensure_stacktrend_imports()
     
     try:
         # Check existing Silver data to avoid re-classifying well-classified repos
@@ -355,25 +377,26 @@ def classify_repositories_with_llm(repositories_df):
             print("No repositories need LLM classification")
             return repositories_df.withColumn("technology_category", F.lit("Other")).withColumn("technology_subcategory", F.lit("unknown")).withColumn("classification_confidence", F.lit(0.1))
         
-        # Convert to format suitable for LLM
+        # Convert Spark DataFrame to list of repository data (only for repos needing LLM)
         repo_data_list = []
-        for row in repos_needing_llm.collect():
+        repos_collected = repos_needing_llm.collect()
+        
+        for row in repos_collected:
+            # Convert PySpark Row to dict for safe access
+            row_dict = row.asDict()
+            
             repo_data = create_repository_data_from_dict({
-                'repository_id': row.repository_id,
-                'name': row.name,
-                'full_name': row.full_name,
-                'description': row.description,
-                'topics': row.topics or [],
-                'language': row.primary_language,
-                'stargazers_count': row.stargazers_count
+                'repository_id': row_dict['repository_id'],
+                'name': row_dict['name'],
+                'full_name': row_dict['full_name'],
+                'description': row_dict.get('description'),
+                'topics': row_dict.get('topics', []),
+                'language': row_dict.get('language'),
+                'stargazers_count': row_dict.get('stargazers_count', 0)
             })
             repo_data_list.append(repo_data)
         
-        if not repo_data_list:
-            print("No repository data to classify")
-            return repos_needing_llm.withColumn("technology_category", F.lit("Other")).withColumn("technology_subcategory", F.lit("unknown")).withColumn("classification_confidence", F.lit(0.1))
-        
-        print(f"Classifying {len(repo_data_list)} repositories...")
+        print(f"Running LLM classification on {repos_needing_llm.count()} repositories...")
         
         # Initialize LLM classifier using environment variables directly (EXACT same as original)
         try:
@@ -396,38 +419,38 @@ def classify_repositories_with_llm(repositories_df):
         classification_map = {}
         for c in classifications:
             classification_map[c.repo_id] = {
-                'technology_category': c.primary_category,  # Map to expected field name
-                'technology_subcategory': c.subcategory,   # Map to expected field name  
-                'classification_confidence': c.confidence   # Map to expected field name
+                'primary_category': c.primary_category,
+                'subcategory': c.subcategory,
+                'confidence': c.confidence
             }
         
         # Add classifications to original DataFrame
         def add_classification(repo_id):
             str_repo_id = str(repo_id)
             classification = classification_map.get(str_repo_id, {
-                'technology_category': 'Other',
-                'technology_subcategory': 'unknown',
-                'classification_confidence': 0.1
+                'primary_category': 'Other',
+                'subcategory': 'unknown',
+                'confidence': 0.1
             })
-            return classification['technology_category']
-        
+            return classification['primary_category']
+
         def add_subcategory(repo_id):
             str_repo_id = str(repo_id)
             classification = classification_map.get(str_repo_id, {
-                'technology_category': 'Other',
-                'technology_subcategory': 'unknown',
-                'classification_confidence': 0.1
+                'primary_category': 'Other',
+                'subcategory': 'unknown',
+                'confidence': 0.1
             })
-            return classification['technology_subcategory']
-        
+            return classification['subcategory']
+
         def add_confidence(repo_id):
             str_repo_id = str(repo_id)
             classification = classification_map.get(str_repo_id, {
-                'technology_category': 'Other',
-                'technology_subcategory': 'unknown',
-                'classification_confidence': 0.1
+                'primary_category': 'Other',
+                'subcategory': 'unknown',
+                'confidence': 0.1
             })
-            return float(classification['classification_confidence'])
+            return float(classification['confidence'])
         
         add_classification_udf = F.udf(add_classification, StringType())
         add_subcategory_udf = F.udf(add_subcategory, StringType())
