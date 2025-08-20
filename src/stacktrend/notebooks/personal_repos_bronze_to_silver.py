@@ -124,6 +124,10 @@ class SimpleLLMClassifier:
         
     def classify_repositories(self, repositories: List[RepositoryData]) -> List[Dict[str, Any]]:
         """Classify repositories using Azure OpenAI."""
+        return self.classify_repositories_sync(repositories)
+    
+    def classify_repositories_sync(self, repositories: List[RepositoryData]) -> List[Dict[str, Any]]:
+        """Synchronous classification method for compatibility."""
         batch_size = 5  # Process in small batches
         all_results = []
         
@@ -139,14 +143,8 @@ class SimpleLLMClassifier:
                 
             except Exception as e:
                 print("Failed to classify batch {}: {}".format(i//batch_size + 1, str(e)))
-                # Add fallback classifications
-                for repo in batch:
-                    all_results.append({
-                        'repository_id': repo.id,
-                        'technology_category': 'Other', 
-                        'technology_subcategory': 'unknown',
-                        'confidence_score': 0.1
-                    })
+                # Raise exception instead of adding fallback - LLM is critical
+                raise Exception("LLM classification batch {} failed: {}".format(i//batch_size + 1, str(e)))
         
         return all_results
     
@@ -238,15 +236,9 @@ Return JSON object with classifications array for all {} repositories:
             
             return classifications
             
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
             print("Failed to parse LLM response as JSON: {}...".format(response[:200]))
-            # Return fallback classifications
-            return [{
-                'repository_id': repo.id,
-                'technology_category': 'Other',
-                'technology_subcategory': 'unknown',
-                'confidence_score': 0.1
-            } for repo in batch]
+            raise Exception(f"LLM response parsing failed - invalid JSON: {e}")
 
 def classify_repositories_with_llm(repositories_df):
     """
@@ -411,8 +403,7 @@ def classify_repositories_with_llm(repositories_df):
         
     except Exception as e:
         print(f"❌ Repository classification failed: {e}")
-        # Return repositories with default classifications
-        return repositories_df.withColumn("technology_category", F.lit("Other")).withColumn("technology_subcategory", F.lit("unknown")).withColumn("classification_confidence", F.lit(0.1))
+        raise Exception(f"LLM classification is mandatory for Silver layer: {e}")
 
 # COMMAND ----------
 # MAGIC %md
@@ -422,14 +413,9 @@ def classify_repositories_with_llm(repositories_df):
 # Read Personal repositories data from Bronze layer
 try:
     # Try mounted path first, fallback to cross-lakehouse reference
-    try:
-        repos_bronze_df = spark.read.format("delta").load("/mnt/bronze/Tables/github_my_repos")
-        print("SUCCESS: Successfully loaded personal repos from mounted Bronze lakehouse")
-    except Exception as e:
-        print(f"Error loading from mounted Bronze lakehouse: {e}")
-        # Fallback to cross-lakehouse table reference
-        repos_bronze_df = spark.table("stacktrend_bronze_lh.github_my_repos")
-        print("SUCCESS: Successfully loaded personal repos using cross-lakehouse reference")
+    # Use cross-lakehouse table reference directly (same as original working notebooks)
+    repos_bronze_df = spark.table("stacktrend_bronze_lh.github_my_repos")
+    print("SUCCESS: Successfully loaded personal repos using cross-lakehouse reference")
     
     # Show basic statistics
     total_repos = repos_bronze_df.count()
@@ -437,24 +423,20 @@ try:
     
 except Exception as e:
     print(f"❌ Error loading repository data: {e}")
-    repos_bronze_df = None
+    raise Exception(f"Cannot proceed without Bronze repository data: {e}")
 
 # Read Activity data from Bronze layer
 try:
-    try:
-        activity_bronze_df = spark.read.format("delta").load("/mnt/bronze/Tables/github_repo_activity")
-        print("SUCCESS: Successfully loaded activity from mounted Bronze lakehouse")
-    except Exception as e:
-        print(f"Error loading activity from mounted Bronze lakehouse: {e}")
-        activity_bronze_df = spark.table("stacktrend_bronze_lh.github_repo_activity")
-        print("SUCCESS: Successfully loaded activity using cross-lakehouse reference")
+    # Use cross-lakehouse table reference directly (same as original working notebooks)
+    activity_bronze_df = spark.table("stacktrend_bronze_lh.github_repo_activity")
+    print("SUCCESS: Successfully loaded activity using cross-lakehouse reference")
     
     total_activities = activity_bronze_df.count()
     print("Bronze Activity Data: {} activities".format(total_activities))
     
 except Exception as e:
     print(f"❌ Error loading activity data: {e}")
-    activity_bronze_df = None
+    raise Exception(f"Cannot proceed without Bronze activity data: {e}")
 
 # COMMAND ----------
 # MAGIC %md
