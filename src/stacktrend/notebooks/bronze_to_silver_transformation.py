@@ -70,10 +70,15 @@ import os
 # COMMAND ----------
 # PARAMETERS CELL: Define parameters that Data Factory will pass
 # This cell must be marked as "parameter cell" in Fabric (click ... → Toggle parameter cell)
-azure_openai_api_key = ""
-azure_openai_endpoint = ""
-azure_openai_api_version = "2025-01-01-preview"
-azure_openai_model = "o4-mini"
+# Only set if not already defined (prevents overwriting actual values from Data Factory)
+if 'azure_openai_api_key' not in locals() or not azure_openai_api_key:  # noqa: F821
+    azure_openai_api_key = ""
+if 'azure_openai_endpoint' not in locals() or not azure_openai_endpoint:  # noqa: F821
+    azure_openai_endpoint = ""
+if 'azure_openai_api_version' not in locals() or not azure_openai_api_version:  # noqa: F821
+    azure_openai_api_version = "2025-01-01-preview"
+if 'azure_openai_model' not in locals() or not azure_openai_model:  # noqa: F821
+    azure_openai_model = "o4-mini"
 
 # COMMAND ----------
 # SECURE: Configure Azure OpenAI credentials from Data Factory parameters
@@ -443,14 +448,54 @@ def extract_language_distribution(language, topics, name):
 
 def classify_repositories_with_llm(repositories_df):
     """
-    Use LLM to classify repositories into smart categories - LLM ONLY, NO FALLBACKS
+    Smart LLM classification - only classify repos that need it (not already well-classified)
     """
     LLMRepositoryClassifier, create_repository_data_from_dict, settings = ensure_stacktrend_imports()
     
     try:
-        # Convert Spark DataFrame to list of repository data
+        # Check existing Silver data to avoid re-classifying well-classified repos
+        repos_needing_llm = repositories_df
+        repos_for_metrics_only = spark.createDataFrame([], repositories_df.schema)
+        
+        try:
+            existing_silver_df = spark.table("github_curated")
+            
+            # Get repos that are already well-classified (confidence >= 0.8 and not Other/unknown)
+            well_classified = (existing_silver_df
+                .filter(
+                    (F.col("technology_category") != "Other") & 
+                    (F.col("technology_subcategory") != "unknown") &
+                    (F.col("classification_confidence") >= 0.8)
+                )
+                .select("repository_id", "technology_category", "technology_subcategory", "classification_confidence")
+            )
+            
+            # Split repos: those needing LLM vs those needing metrics-only update  
+            repos_needing_llm = repositories_df.join(well_classified, "repository_id", "left_anti")
+            repos_for_metrics_only = repositories_df.join(well_classified, "repository_id", "inner")
+            
+            llm_count = repos_needing_llm.count()
+            metrics_count = repos_for_metrics_only.count()
+            
+            print("Smart Classification Strategy:")
+            print(f"  Repos needing LLM classification: {llm_count}")
+            print(f"  Repos with metrics-only update: {metrics_count}")
+            print(f"  Cost savings: ~${(metrics_count * 0.00006):.3f} (skipped {metrics_count} LLM calls)")
+            
+        except Exception as e:
+            print(f"No existing Silver data found: {e}")
+            print("Will classify all repositories with LLM")
+        
+        # Only run LLM on repos that need it
+        if repos_needing_llm.count() == 0:
+            print("✅ No repositories need LLM classification")
+            return repositories_df.withColumn("technology_category", F.lit("Other")).withColumn("technology_subcategory", F.lit("unknown")).withColumn("classification_confidence", F.lit(0.1))
+        
+        print(f"Running LLM classification on {repos_needing_llm.count()} repositories...")
+        
+        # Convert Spark DataFrame to list of repository data (only for repos needing LLM)
         repo_data_list = []
-        repos_collected = repositories_df.collect()
+        repos_collected = repos_needing_llm.collect()
         
         for row in repos_collected:
             # Convert PySpark Row to dict for safe access
@@ -467,13 +512,13 @@ def classify_repositories_with_llm(repositories_df):
             })
             repo_data_list.append(repo_data)
         
-        # Initialize LLM classifier
+        # Initialize LLM classifier using environment variables directly
         try:
             classifier = LLMRepositoryClassifier(
-                api_key=settings.AZURE_OPENAI_API_KEY,
-                endpoint=settings.AZURE_OPENAI_ENDPOINT,
-                api_version=settings.AZURE_OPENAI_API_VERSION,
-                model=settings.AZURE_OPENAI_MODEL
+                api_key=os.environ.get('AZURE_OPENAI_API_KEY'),
+                endpoint=os.environ.get('AZURE_OPENAI_ENDPOINT'),
+                api_version=os.environ.get('AZURE_OPENAI_API_VERSION', '2025-01-01-preview'),
+                model=os.environ.get('AZURE_OPENAI_MODEL', 'o4-mini')
             )
         except Exception as e:
             raise Exception(f"LLM Classifier initialization failed: {e}")
@@ -523,10 +568,44 @@ def classify_repositories_with_llm(repositories_df):
         add_subcategory_udf = F.udf(add_subcategory, StringType())
         add_confidence_udf = F.udf(add_confidence, DoubleType())
         
-        return (repositories_df
+        # Add classifications to repos that needed LLM
+        classified_repos = (repos_needing_llm
                 .withColumn("technology_category", add_classification_udf(F.col("repository_id")))
                 .withColumn("technology_subcategory", add_subcategory_udf(F.col("repository_id")))
                 .withColumn("classification_confidence", add_confidence_udf(F.col("repository_id"))))
+        
+        # For repos with metrics-only update, preserve existing classifications
+        if repos_for_metrics_only.count() > 0:
+            # Create lookup map for existing classifications
+            existing_classifications = {row.repository_id: (row.technology_category, row.technology_subcategory, row.classification_confidence) 
+                                     for row in well_classified.collect()}
+            
+            def get_existing_category(repo_id):
+                return existing_classifications.get(repo_id, ("Other", "unknown", 0.1))[0]
+            
+            def get_existing_subcategory(repo_id):
+                return existing_classifications.get(repo_id, ("Other", "unknown", 0.1))[1]
+                
+            def get_existing_confidence(repo_id):
+                return existing_classifications.get(repo_id, ("Other", "unknown", 0.1))[2]
+            
+            # Create UDFs for existing classifications  
+            existing_category_udf = F.udf(get_existing_category, StringType())
+            existing_subcategory_udf = F.udf(get_existing_subcategory, StringType()) 
+            existing_confidence_udf = F.udf(get_existing_confidence, DoubleType())
+            
+            # Add existing classifications using same pattern as LLM classifications
+            metrics_with_classification = (repos_for_metrics_only
+                .withColumn("technology_category", existing_category_udf(F.col("repository_id")))
+                .withColumn("technology_subcategory", existing_subcategory_udf(F.col("repository_id")))
+                .withColumn("classification_confidence", existing_confidence_udf(F.col("repository_id"))))
+            
+            # Now both DataFrames have the same schema - safe to union
+            final_df = classified_repos.union(metrics_with_classification)
+        else:
+            final_df = classified_repos
+        
+        return final_df
         
     except Exception as e:
         print(f"Error classifying repositories with LLM: {e}")
@@ -773,21 +852,112 @@ final_silver_df = silver_validated_df.select(
     "partition_date"
 )
 
-# Write to Silver lakehouse (using default lakehouse configuration)
+# Smart Delta merge to Silver lakehouse
 try:
-    (final_silver_df
-     .write
-     .format("delta")
-     .mode("overwrite")
-     .option("overwriteSchema", "true")
-     .partitionBy("partition_date", "technology_category")
-     .saveAsTable("silver_repositories"))
+    # Check if Silver table exists
+    table_exists = True
+    try:
+        existing_silver = spark.table("github_curated")
+        existing_silver_count = existing_silver.count()
+        print(f"Found existing Silver table with {existing_silver_count} records")
+    except Exception:
+        table_exists = False
+        print("Silver table doesn't exist - will create new table")
     
-    print(f"Successfully wrote {clean_records} records to Silver layer")
+    if table_exists and clean_records > 0:
+        print("Performing Silver layer Delta merge...")
+        
+        final_silver_df.createOrReplaceTempView("new_silver_data")
+        
+        # SMART MERGE: Preserve good classifications, update metrics
+        merge_sql = """
+        MERGE INTO github_curated AS target
+        USING new_silver_data AS source
+        ON target.repository_id = source.repository_id
+        
+        WHEN MATCHED THEN
+          UPDATE SET
+            name = source.name,
+            full_name = source.full_name,
+            description_clean = source.description_clean,
+            updated_at = source.updated_at,
+            pushed_at = source.pushed_at,
+            stargazers_count = source.stargazers_count,
+            watchers_count = source.watchers_count,
+            forks_count = source.forks_count,
+            open_issues_count = source.open_issues_count,
+            star_velocity_30d = source.star_velocity_30d,
+            community_health_score = source.community_health_score,
+            quality_score = source.quality_score,
+            topics_standardized = source.topics_standardized,
+            license_category = source.license_category,
+            is_active = source.is_active,
+            days_since_push = source.days_since_push,
+            days_since_creation = source.days_since_creation,
+            processed_timestamp = source.processed_timestamp,
+            
+            -- Only update technology fields if current classification is poor
+            technology_category = CASE 
+                WHEN target.technology_category = 'Other' OR target.technology_category IS NULL 
+                THEN source.technology_category 
+                ELSE target.technology_category 
+            END,
+            technology_subcategory = CASE 
+                WHEN target.technology_subcategory = 'unknown' OR target.technology_subcategory IS NULL 
+                THEN source.technology_subcategory 
+                ELSE target.technology_subcategory 
+            END,
+            classification_confidence = CASE 
+                WHEN target.technology_category = 'Other' OR target.technology_subcategory = 'unknown' 
+                THEN source.classification_confidence 
+                ELSE target.classification_confidence 
+            END
+            
+        WHEN NOT MATCHED THEN
+          INSERT *
+        """
+        
+        spark.sql(merge_sql)
+        
+        # Get merge statistics
+        final_silver_count = spark.table("github_curated").count()
+        new_records = final_silver_count - existing_silver_count
+        updated_records = clean_records - max(0, new_records)
+        
+        print("Silver layer Delta merge completed:")
+        print(f"  Total records now: {final_silver_count}")
+        print(f"  New records added: {max(0, new_records)}")
+        print(f"  Records updated: {updated_records}")
+        
+    else:
+        # First time or no data - use overwrite
+        if clean_records > 0:
+            (final_silver_df
+             .write
+             .format("delta")
+             .mode("overwrite")
+             .option("overwriteSchema", "true")
+             .partitionBy("partition_date", "technology_category")
+             .saveAsTable("github_curated"))
+            print(f"✅ Created new Silver table with {clean_records} records")
+        else:
+            print("⚠️ No clean records to save")
     
 except Exception as e:
-    print(f"ERROR: Error saving to Silver lakehouse: {e}")
-    raise
+    print(f"❌ Error with Silver Delta merge: {e}")
+    print("Falling back to overwrite mode...")
+    try:
+        (final_silver_df
+         .write
+         .format("delta")
+         .mode("overwrite")
+         .option("overwriteSchema", "true")
+         .partitionBy("partition_date", "technology_category")
+         .saveAsTable("github_curated"))
+        print(f"✅ Fallback successful: Saved {clean_records} records")
+    except Exception as fallback_error:
+        print(f"❌ Fallback also failed: {fallback_error}")
+        raise
 
 # COMMAND ----------
 # MAGIC %md
