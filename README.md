@@ -12,6 +12,8 @@ StackTrend is an intelligent data platform that combines automated data collecti
 
 The platform implements a modern medallion architecture pattern within Microsoft Fabric, creating a seamless flow from raw data collection to business intelligence dashboards.
 
+[Youtube video](https://youtu.be/_owR-jd8nlY) of project demo I gave at an Microsoft event. 
+
 ### Data Flow
 
 1. **Data Collection Layer**: GitHub API serves as the primary data source, providing repository metadata, statistics, and activity information
