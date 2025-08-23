@@ -1,0 +1,44 @@
+name: Deploy Personal Repos Notebooks
+
+on:
+  push:
+    branches: [dev]
+    paths: 
+      - 'src/stacktrend/notebooks/personal_repos_ingestion.py'
+      - 'src/stacktrend/notebooks/personal_repos_bronze_to_silver.py'
+      - 'src/stacktrend/notebooks/personal_repos_silver_to_gold.py'
+      - 'src/stacktrend/utils/deploy_contributors_notebooks.py'
+      - 'src/stacktrend/utils/llm_classifier.py'
+      - 'src/stacktrend/config/settings.py'
+      - '.github/workflows/deploy-contributors-notebooks.yml'
+
+jobs:
+  deploy-personal-repos-notebooks:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install .
+        
+    - name: Deploy Personal Repos to Fabric
+      env:
+        FABRIC_TENANT_ID: ${{ secrets.FABRIC_TENANT_ID }}
+        FABRIC_CLIENT_ID: ${{ secrets.FABRIC_CLIENT_ID }}
+        FABRIC_CLIENT_SECRET: ${{ secrets.FABRIC_CLIENT_SECRET }}
+        FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+      run: |
+        python -m src.stacktrend.utils.deploy_contributors_notebooks
+        
+    - name: Report deployment status
+      run: |
+        echo "✅ Personal repos notebook deployment completed!"

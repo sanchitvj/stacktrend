@@ -4,7 +4,9 @@ on:
   push:
     branches: [dev]
     paths: 
-      - 'src/stacktrend/notebooks/**'
+      - 'src/stacktrend/notebooks/bronze_to_silver_transformation.py'
+      - 'src/stacktrend/notebooks/silver_to_gold_analytics.py'
+      - 'src/stacktrend/notebooks/github_data_ingestion.py'
       - 'src/stacktrend/utils/deploy_notebooks.py'
       - 'src/stacktrend/utils/llm_classifier.py'
       - 'src/stacktrend/config/settings.py'
